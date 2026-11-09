@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="nl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SideChart</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232962ff'/><path d='M6 22l6-7 5 4 9-11' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <svg viewBox="0 0 32 32" width="22" height="22" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#2962ff" /><path d="M6 22l6-7 5 4 9-11" stroke="white" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          <span>SideChart</span>
+        </div>
+
+        <div class="group">
+          <input id="symbol" class="symbol" list="symbol-list" spellcheck="false" autocomplete="off" title="Symbool (bv. BTCUSDT)" />
+          <datalist id="symbol-list"></datalist>
+        </div>
+
+        <div class="group tf" id="tf-buttons"></div>
+        <div class="group">
+          <select id="tf-more" title="Alle timeframes"></select>
+          <input id="tf-custom" class="tf-custom" placeholder="eigen: 10m, 3h, 2D" title="Eigen timeframe: getal + s/m/h/D/W/M" />
+        </div>
+
+        <div class="group">
+          <select id="chart-type" title="Grafiektype">
+            <option value="candles">Candles</option>
+            <option value="hollow">Hollow candles</option>
+            <option value="heikin">Heikin Ashi</option>
+            <option value="bars">Bars (OHLC)</option>
+            <option value="line">Lijn</option>
+            <option value="area">Area</option>
+            <option value="baseline">Baseline</option>
+          </select>
+        </div>
+
+        <div class="group">
+          <button id="btn-indicators" class="btn primary" title="Indicatoren toevoegen"><b>ƒx</b> Indicatoren</button>
+        </div>
+
+        <div class="group tools" role="toolbar" aria-label="Tekentools">
+          <button class="btn icon" data-tool="hline" title="Horizontale lijn">―</button>
+          <button class="btn icon" data-tool="trend" title="Trendlijn (2 klikken)">╱</button>
+          <button class="btn icon" data-tool="fib" title="Fibonacci retracement (2 klikken)">Fib</button>
+          <button class="btn icon" data-tool="alert" title="Prijsalarm (klik op een prijs)">🔔</button>
+          <button class="btn icon" id="btn-clear-drawings" title="Tekeningen wissen">🗑</button>
+        </div>
+
+        <div class="group right">
+          <select id="bars" title="Hoeveel historie laden (meer = langere backtest)">
+            <option value="1000">1k bars</option>
+            <option value="3000">3k bars</option>
+            <option value="5000" selected>5k bars</option>
+            <option value="10000">10k bars</option>
+            <option value="20000">20k bars</option>
+            <option value="50000">50k bars</option>
+          </select>
+          <label class="btn" title="Eigen data importeren (CSV met time, open, high, low, close, volume)">
+            CSV <input type="file" id="csv" accept=".csv,text/csv" hidden />
+          </label>
+          <button id="btn-theme" class="btn icon" title="Licht/donker">◐</button>
+          <button id="btn-sidebar" class="btn icon" title="Zijbalk">☰</button>
+        </div>
+      </header>
+
+      <main class="main">
+        <div class="chart-area">
+          <div id="legend" class="legend"></div>
+          <div id="chart" class="chart"></div>
+          <div id="status" class="status"></div>
+          <div id="tool-hint" class="tool-hint" hidden></div>
+        </div>
+
+        <aside class="sidebar" id="sidebar">
+          <section>
+            <div class="side-head">
+              <h3>Watchlist</h3>
+              <button id="btn-watch-add" class="btn small" title="Huidig symbool toevoegen">+</button>
+            </div>
+            <ul id="watchlist" class="watchlist"></ul>
+          </section>
+          <section>
+            <h3>Op de grafiek</h3>
+            <ul id="active-indicators" class="active-list"></ul>
+          </section>
+          <section>
+            <div class="side-head">
+              <h3>Alarmen</h3>
+              <button id="btn-notify" class="btn small" title="Browsermeldingen toestaan">Meldingen aan</button>
+            </div>
+            <ul id="alerts" class="active-list"></ul>
+          </section>
+        </aside>
+      </main>
+
+      <section class="tester" id="tester">
+        <div class="tester-head">
+          <div class="tabs" role="tablist">
+            <button class="tab active" data-tab="overview">Strategy Tester</button>
+            <button class="tab" data-tab="trades">Trades</button>
+            <button class="tab" data-tab="optimizer">Optimizer</button>
+          </div>
+          <div class="tester-summary" id="tester-summary"></div>
+          <button id="btn-tester-toggle" class="btn icon" title="In-/uitklappen">▾</button>
+        </div>
+
+        <div class="tester-body">
+          <div class="strategy-form">
+            <label>Strategie
+              <select id="strategy"></select>
+            </label>
+            <p id="strategy-desc" class="muted"></p>
+            <div id="strategy-params" class="param-grid"></div>
+            <div id="custom-rules" class="custom-rules" hidden>
+              <label>Long entry <input id="rule-el" placeholder="EMA(9) crosses above EMA(21)" /></label>
+              <label>Long exit <input id="rule-xl" placeholder="EMA(9) crosses below EMA(21)" /></label>
+              <label>Short entry <input id="rule-es" placeholder="(leeg = geen shorts)" /></label>
+              <label>Short exit <input id="rule-xs" placeholder="" /></label>
+              <details><summary>Hoe schrijf ik regels?</summary><pre id="rule-help"></pre></details>
+            </div>
+
+            <details class="settings" open>
+              <summary>Instellingen</summary>
+              <div class="param-grid">
+                <label>Startkapitaal <input type="number" id="s-capital" min="1" step="100" /></label>
+                <label>Positie % van kapitaal <input type="number" id="s-size" min="1" max="100" step="1" /></label>
+                <label>Commissie % <input type="number" id="s-comm" min="0" step="0.01" /></label>
+                <label>Slippage % <input type="number" id="s-slip" min="0" step="0.01" /></label>
+                <label>Richting
+                  <select id="s-dir"><option value="long">Alleen long</option><option value="short">Alleen short</option><option value="both">Long &amp; short</option></select>
+                </label>
+                <label>Uitvoering
+                  <select id="s-fill"><option value="nextOpen">Volgende open</option><option value="close">Op slot</option></select>
+                </label>
+                <label>Stop loss % <input type="number" id="s-sl" min="0" step="0.1" /></label>
+                <label>Take profit % <input type="number" id="s-tp" min="0" step="0.1" /></label>
+                <label>Trailing stop % <input type="number" id="s-trail" min="0" step="0.1" /></label>
+              </div>
+            </details>
+
+            <div class="row">
+              <button id="btn-run" class="btn primary">▶ Backtest</button>
+              <label class="check"><input type="checkbox" id="auto-run" checked /> automatisch</label>
+              <label class="check"><input type="checkbox" id="show-ind" checked /> toon indicatoren</label>
+              <button id="btn-strategy-off" class="btn">Uit</button>
+            </div>
+            <p id="strategy-error" class="error" hidden></p>
+          </div>
+
+          <div class="tab-panel" data-panel="overview">
+            <div id="metrics" class="metrics"></div>
+            <div id="equity" class="equity"></div>
+          </div>
+
+          <div class="tab-panel" data-panel="trades" hidden>
+            <div class="row"><button id="btn-export" class="btn small">Exporteer CSV</button></div>
+            <div class="table-wrap"><table id="trades" class="table"></table></div>
+          </div>
+
+          <div class="tab-panel" data-panel="optimizer" hidden>
+            <p class="muted">Test automatisch alle combinaties van 1 of 2 parameters en sorteer op resultaat. Klik op een rij om die instellingen te gebruiken.</p>
+            <div class="opt-grid" id="opt-ranges"></div>
+            <div class="row">
+              <label>Sorteer op
+                <select id="opt-sort">
+                  <option value="netProfitPct">Netto winst %</option>
+                  <option value="profitFactor">Profit factor</option>
+                  <option value="sharpe">Sharpe</option>
+                  <option value="winRate">Win rate</option>
+                  <option value="maxDrawdownPct">Laagste drawdown</option>
+                </select>
+              </label>
+              <button id="btn-optimize" class="btn primary">Optimaliseer</button>
+            </div>
+            <p class="warning">Let op: de beste instellingen uit het verleden zijn geen garantie voor de toekomst (overfitting). Test ze daarna op een andere periode of markt.</p>
+            <div class="table-wrap"><table id="opt-results" class="table"></table></div>
+          </div>
+        </div>
+      </section>
+
+      <dialog id="dlg-indicators" class="dialog">
+        <div class="dialog-head">
+          <h2>Indicatoren</h2>
+          <button class="btn icon" data-close>✕</button>
+        </div>
+        <input id="ind-search" class="search" placeholder="Zoeken…" autocomplete="off" />
+        <div id="ind-list" class="ind-list"></div>
+      </dialog>
+
+      <dialog id="dlg-params" class="dialog small">
+        <form method="dialog" id="params-form">
+          <div class="dialog-head">
+            <h2 id="params-title">Instellingen</h2>
+            <button class="btn icon" value="cancel" formnovalidate>✕</button>
+          </div>
+          <div id="params-fields" class="param-grid"></div>
+          <div class="row end">
+            <button class="btn" value="cancel" formnovalidate>Annuleren</button>
+            <button class="btn primary" value="ok">OK</button>
+          </div>
+        </form>
+      </dialog>
+
+      <div id="toasts" class="toasts" aria-live="polite"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
