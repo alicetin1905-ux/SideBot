@@ -18,7 +18,7 @@ npm run dev        # open http://localhost:5173
 
 ```bash
 npm run build      # static files in sidechart/dist/ (GitHub Pages, Netlify, Vercel, …)
-npm test           # 104 unit tests (indicators, strategies, futures backtester, calculator, exchange adapters)
+npm test           # 119 unit tests (indicators, strategies, futures backtester, calculator, exchange adapters)
 ```
 
 ## Features
@@ -64,13 +64,22 @@ example when your liquidation price lies before your stop. Entry, SL, TP and LIQ
   equity curve and trade list (CSV export).
 - **Optimizer:** grid search over strategy parameters **and leverage**.
 
-**Strategies:** ⚡ Funding Contrarian (adaptive z-score on the real funding) · SuperTrend · MA Crossover ·
-Golden Cross · RSI · MACD · Bollinger (mean reversion and breakout) · Donchian/Turtle · Stochastic ·
-Parabolic SAR · Ichimoku · ADX/DI · Trend + RSI pullback · **Custom rules (no-code)**, for example:
+**Strategies (24 built-in + your own):**
+- ⚡ Futures: Funding Contrarian (adaptive z-score on the real funding)
+- Trend: SuperTrend · Chandelier Exit · Hull MA Trend · EMA Ribbon (8/21/55) · MA Crossover · Golden Cross ·
+  Ichimoku · ADX/DI · Parabolic SAR · Heikin Ashi Trend
+- Breakout: Squeeze (BB in Keltner) · Keltner Breakout · Bollinger Breakout · Donchian/Turtle · Opening Range Breakout
+- Mean reversion: Z-score · Bollinger Mean Reversion · RSI · Stochastic
+- Momentum: MACD · MACD + RSI Combo · Trend + RSI pullback · VWAP Trend (intraday)
+
+**Custom strategies (no-code):** write rules, or load one of the ready-made examples, and save them under a
+name. They appear under "★ My strategies", changes are saved automatically, and you can make a copy or
+delete them. Example:
 
 ```
 Short entry:  FUNDING > 0.03 AND close < EMA(50)
 Short exit:   FUNDING < 0.01
+Long entry:   close > HIGHEST(20) AND volume > VOLSMA(20)
 ```
 
 **Other:** drawing tools (line, trendline, Fibonacci), price alarms with browser notifications, CSV import,

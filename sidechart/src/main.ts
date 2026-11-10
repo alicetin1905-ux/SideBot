@@ -3,7 +3,7 @@ import type { Candle, ParamDef, Params } from './types';
 import { baseIntervalFor, bucketStart, parseCsv, parseTimeframe, resample, type Timeframe } from './data';
 import { ChartView, EquityChart, NEON, type ChartType, type Drawing, type DrawTool } from './chart';
 import { INDICATORS, INDICATOR_MAP, defaultParams, type ExtData } from './indicators';
-import { RULE_HELP, STRATEGIES, STRATEGY_MAP, customSignals, rulesExternal, type CustomRules, type Signals } from './strategies';
+import { RULE_EXAMPLES, RULE_HELP, STRATEGIES, STRATEGY_MAP, customSignals, rulesExternal, type CustomRules, type Signals, type StrategyDef } from './strategies';
 import { DEFAULT_SETTINGS, optimize, runBacktest, type BacktestResult, type BacktestSettings, type Metrics } from './backtest';
 import { planPosition } from './futures';
 import { fetchSentiment, openInterestHistory, recordOpenInterest } from './sentiment';
@@ -39,6 +39,8 @@ interface State {
   indicators: { id: string; params: Params; hidden?: boolean }[];
   drawings: Record<string, Drawing[]>;
   alerts: Alert[];
+  /** The user's own saved no-code strategies */
+  saved: { id: string; name: string; rules: CustomRules }[];
   calc: { balance: number; risk: number; lev: number; fee: number; entry: number; stop: number; target: number; mmr: number; show: boolean };
   strategy: {
     id: string;
@@ -73,6 +75,7 @@ const DEFAULT_STATE: State = {
   ],
   drawings: {},
   alerts: [],
+  saved: [],
   calc: { balance: 1000, risk: 1, lev: 10, fee: 0.05, entry: 0, stop: 0, target: 0, mmr: 0.5, show: true },
   strategy: {
     id: 'supertrend',
@@ -404,7 +407,7 @@ function neededExt(): ExtKind[] {
   if (state.strategy.enabled) {
     const def = currentStrategy();
     for (const k of def.external ?? []) set.add(k);
-    if (def.id === 'custom') for (const k of rulesExternal(state.strategy.rules)) set.add(k);
+    if (isRuleBased(def)) for (const k of rulesExternal(activeRules())) set.add(k);
     if (state.strategy.settings.funding === 'history') set.add('funding');
   }
   // Binance candles already contain taker volume.
@@ -1049,7 +1052,26 @@ function checkAlerts(exchange: Exchange['id'], symbol: string, price: number) {
 // Strategy tester
 // ============================================================================
 
-const currentStrategy = () => STRATEGY_MAP.get(state.strategy.id) ?? STRATEGIES[0];
+const SAVED_PREFIX = 'saved:';
+const savedEntry = () => state.saved.find((x) => SAVED_PREFIX + x.id === state.strategy.id);
+
+function currentStrategy(): StrategyDef {
+  const sv = savedEntry();
+  if (sv) {
+    return {
+      id: SAVED_PREFIX + sv.id,
+      name: sv.name,
+      description: 'Je eigen strategie (no-code regels). Pas de regels hieronder aan.',
+      params: [],
+      signals: (c, _p, e) => customSignals(c, sv.rules, e),
+    };
+  }
+  return STRATEGY_MAP.get(state.strategy.id) ?? STRATEGIES[0];
+}
+
+/** Custom rules or a saved user strategy: both are edited in the rules editor. */
+const isRuleBased = (def: StrategyDef) => def.id === 'custom' || def.id.startsWith(SAVED_PREFIX);
+const activeRules = (): CustomRules => savedEntry()?.rules ?? state.strategy.rules;
 
 function strategyParams(): Params {
   const def = currentStrategy();
@@ -1058,7 +1080,7 @@ function strategyParams(): Params {
 
 function buildSignals(params: Params): Signals {
   const def = currentStrategy();
-  return def.id === 'custom' ? customSignals(candles, state.strategy.rules, ext) : def.signals(candles, params, ext);
+  return isRuleBased(def) ? customSignals(candles, activeRules(), ext) : def.signals(candles, params, ext);
 }
 
 function renderStrategyForm() {
@@ -1066,7 +1088,11 @@ function renderStrategyForm() {
   $<HTMLSelectElement>('#strategy').value = def.id;
   $('#strategy-desc').textContent = def.description;
   $('#strategy-params').innerHTML = paramFieldsHtml(def.params, strategyParams(), 'sp');
-  $('#custom-rules').hidden = def.id !== 'custom';
+  $('#custom-rules').hidden = !isRuleBased(def);
+  const rules = activeRules();
+  for (const [sel, key] of RULE_INPUTS) $<HTMLInputElement>(sel).value = rules[key];
+  $('#saved-actions').hidden = !def.id.startsWith(SAVED_PREFIX);
+  $<HTMLInputElement>('#save-name').placeholder = def.id.startsWith(SAVED_PREFIX) ? `Kopie van ${def.name}` : 'Naam, bv. Mijn BTC scalp';
   renderOptimizerRanges();
 }
 
@@ -1231,7 +1257,7 @@ function runOptimizer() {
   const keys = $$<HTMLInputElement>('[data-opt]').filter((c) => c.checked).map((c) => c.dataset.opt!);
   if (!keys.length) return toast('Vink minstens één parameter aan', true);
   if (keys.length > 2) return toast('Kies maximaal 2 parameters', true);
-  if (def.id === 'custom' && keys.some((k) => k !== '__leverage')) return toast('Bij eigen regels kun je alleen leverage optimaliseren', true);
+  if (isRuleBased(def) && keys.some((k) => k !== '__leverage')) return toast('Bij eigen regels kun je alleen leverage optimaliseren', true);
   const ranges = keys.map((key) => ({
     key,
     from: parseFloat($<HTMLInputElement>(`[data-from="${key}"]`).value),
@@ -1247,7 +1273,7 @@ function runOptimizer() {
   setTimeout(() => {
     const base = strategyParams();
     const t0 = performance.now();
-    const fixedSignals = def.id === 'custom' ? customSignals(candles, state.strategy.rules, ext) : null;
+    const fixedSignals = isRuleBased(def) ? customSignals(candles, activeRules(), ext) : null;
     const rows = optimize(
       candles,
       (values) => fixedSignals ?? def.signals(candles, { ...base, ...values }, ext),
@@ -1292,21 +1318,30 @@ const SETTING_INPUTS: [string, keyof BacktestSettings][] = [
   ['#s-fint', 'fundingIntervalH'],
 ];
 
-function setupStrategyUi() {
+const RULE_INPUTS: [string, keyof CustomRules][] = [
+  ['#rule-el', 'entryLong'],
+  ['#rule-xl', 'exitLong'],
+  ['#rule-es', 'entryShort'],
+  ['#rule-xs', 'exitShort'],
+];
+
+function fillStrategySelect() {
+  const opt = (id: string, name: string) => `<option value="${esc(id)}">${esc(name)}</option>`;
   $('#strategy').innerHTML =
-    `<optgroup label="⚡ Futures">${STRATEGIES.filter((s) => s.external).map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</optgroup>` +
-    `<optgroup label="Technisch">${STRATEGIES.filter((s) => !s.external && s.id !== 'custom').map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</optgroup>` +
-    `<optgroup label="Zelf maken"><option value="custom">Eigen regels (no-code)</option></optgroup>`;
+    (state.saved.length ? `<optgroup label="★ Mijn strategieën">${state.saved.map((x) => opt(SAVED_PREFIX + x.id, x.name)).join('')}</optgroup>` : '') +
+    `<optgroup label="⚡ Futures">${STRATEGIES.filter((x) => x.external).map((x) => opt(x.id, x.name)).join('')}</optgroup>` +
+    `<optgroup label="Technisch">${STRATEGIES.filter((x) => !x.external && x.id !== 'custom').map((x) => opt(x.id, x.name)).join('')}</optgroup>` +
+    `<optgroup label="Zelf maken">${opt('custom', '✎ Eigen regels (no-code)')}</optgroup>`;
+  $<HTMLSelectElement>('#strategy').value = currentStrategy().id;
+}
+
+function setupStrategyUi() {
+  if (state.strategy.id.startsWith(SAVED_PREFIX) && !savedEntry()) state.strategy.id = 'custom';
+  fillStrategySelect();
   $('#rule-help').textContent = RULE_HELP;
+  $('#rule-example').innerHTML += RULE_EXAMPLES.map((x, i) => `<option value="${i}">${esc(x.name)}</option>`).join('');
 
   const s = state.strategy;
-  const ruleInputs: [string, keyof CustomRules][] = [
-    ['#rule-el', 'entryLong'],
-    ['#rule-xl', 'exitLong'],
-    ['#rule-es', 'entryShort'],
-    ['#rule-xs', 'exitShort'],
-  ];
-  for (const [sel, key] of ruleInputs) $<HTMLInputElement>(sel).value = s.rules[key];
   for (const [sel, key] of SETTING_INPUTS) $<HTMLInputElement>(sel).value = String(s.settings[key]);
   $<HTMLInputElement>('#auto-run').checked = s.autoRun;
   $<HTMLInputElement>('#show-ind').checked = s.showIndicators;
@@ -1327,12 +1362,51 @@ function setupStrategyUi() {
     s.params[def.id] = readParams($('#strategy-params'), def.params, 'sp');
     autoRun();
   });
-  for (const [sel, key] of ruleInputs) {
+  for (const [sel, key] of RULE_INPUTS) {
     $(sel).addEventListener('input', (e) => {
-      s.rules[key] = (e.target as HTMLInputElement).value;
+      activeRules()[key] = (e.target as HTMLInputElement).value;
       autoRun();
     });
   }
+  $('#rule-example').addEventListener('change', (e) => {
+    const sel = e.target as HTMLSelectElement;
+    const ex = RULE_EXAMPLES[Number(sel.value)];
+    sel.value = '';
+    if (!ex) return;
+    Object.assign(activeRules(), ex.rules);
+    renderStrategyForm();
+    if (!$<HTMLInputElement>('#save-name').value) $<HTMLInputElement>('#save-name').value = ex.name;
+    toast(`Voorbeeld "${ex.name}" geladen`);
+    runStrategy();
+  });
+  $('#btn-save-strategy').addEventListener('click', () => {
+    const input = $<HTMLInputElement>('#save-name');
+    const sv = savedEntry();
+    const name = input.value.trim() || (sv ? `Kopie van ${sv.name}` : '');
+    if (!name) return toast('Geef je strategie eerst een naam', true);
+    const rules = { ...activeRules() };
+    if (!Object.values(rules).some((r) => r.trim())) return toast('Vul eerst minstens één regel in', true);
+    const id = Date.now().toString(36);
+    state.saved.push({ id, name, rules });
+    s.id = SAVED_PREFIX + id;
+    input.value = '';
+    fillStrategySelect();
+    renderStrategyForm();
+    save();
+    toast(`"${name}" opgeslagen onder Mijn strategieën`);
+    runStrategy();
+  });
+  $('#btn-delete-strategy').addEventListener('click', () => {
+    const sv = savedEntry();
+    if (!sv || !confirm(`Strategie "${sv.name}" verwijderen?`)) return;
+    state.saved = state.saved.filter((x) => x !== sv);
+    s.id = 'custom';
+    fillStrategySelect();
+    renderStrategyForm();
+    save();
+    toast(`"${sv.name}" verwijderd`);
+    if (s.enabled) runStrategy();
+  });
   for (const [sel, key] of SETTING_INPUTS) {
     $(sel).addEventListener('input', (e) => {
       const el = e.target as HTMLInputElement;

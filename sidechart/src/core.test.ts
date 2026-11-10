@@ -103,6 +103,54 @@ describe('strategies', () => {
     expect(s.entryLong.some(Boolean)).toBe(true);
     expect(s.entryShort.some(Boolean)).toBe(true);
   });
+  it('every rule example parses and produces signals', async () => {
+    const { RULE_EXAMPLES } = await import('./strategies');
+    for (const ex of RULE_EXAMPLES) {
+      const sig = customSignals(c, ex.rules, ext);
+      const any = sig.entryLong.some(Boolean) || sig.entryShort.some(Boolean);
+      expect(any, ex.name).toBe(true);
+    }
+  });
+  it('new strategies trade in both directions', () => {
+    for (const id of ['squeeze', 'chandelier', 'ema_ribbon', 'hull_trend', 'zscore_revert', 'heikin_trend', 'macd_rsi']) {
+      const def = STRATEGIES.find((x) => x.id === id)!;
+      const sig = def.signals(c, defaultParamsFor(def), ext);
+      expect(sig.entryLong.some(Boolean), `${id} long`).toBe(true);
+      expect(sig.entryShort.some(Boolean), `${id} short`).toBe(true);
+    }
+  });
+  it('opening range breakout trades at most once per day and is flat at day end', () => {
+    // 15-minute bars over 5 days
+    const m = mk(Array.from({ length: 96 * 5 }, (_, i) => 100 + Math.sin(i / 7) * 3 + i * 0.01), 1_700_006_400, 900);
+    const def = STRATEGIES.find((x) => x.id === 'orb')!;
+    const sig = def.signals(m, defaultParamsFor(def), {});
+    const perDay = new Map<number, number>();
+    sig.entryLong.forEach((v, i) => {
+      if (v || sig.entryShort[i]) perDay.set(Math.floor(m[i].time / 86400), (perDay.get(Math.floor(m[i].time / 86400)) ?? 0) + 1);
+    });
+    expect([...perDay.values()].every((n) => n <= 1)).toBe(true);
+    expect(perDay.size).toBeGreaterThan(0);
+  });
+  it('keltner breakout enters long on a breakout up and short on a breakdown', () => {
+    // quiet range, sharp rally, quiet, sharp drop
+    const prices = [
+      ...Array.from({ length: 60 }, (_, i) => 100 + Math.sin(i) * 0.3),
+      ...Array.from({ length: 10 }, (_, i) => 101 + i * 1.5),
+      ...Array.from({ length: 60 }, (_, i) => 115 + Math.sin(i) * 0.3),
+      ...Array.from({ length: 10 }, (_, i) => 114 - i * 1.5),
+    ];
+    const k = prices.map((p, i) => ({ time: i * 3600, open: i ? prices[i - 1] : p, high: Math.max(p, i ? prices[i - 1] : p) + 0.1, low: Math.min(p, i ? prices[i - 1] : p) - 0.1, close: p, volume: 1 }));
+    const def = STRATEGIES.find((x) => x.id === 'keltner_breakout')!;
+    const sig = def.signals(k, defaultParamsFor(def), {});
+    const firstLong = sig.entryLong.indexOf(true);
+    const firstShort = sig.entryShort.indexOf(true);
+    expect(firstLong).toBeGreaterThanOrEqual(60);
+    expect(firstLong).toBeLessThan(70);
+    expect(firstShort).toBeGreaterThanOrEqual(130);
+  });
+  it('VOLSMA works in rules', () => {
+    expect(evalRule(c, 'volume > VOLSMA(20)').some(Boolean)).toBe(true);
+  });
   it('custom rules parse and evaluate', () => {
     const s = customSignals(c, { entryLong: 'EMA(9) crosses above EMA(21) AND RSI(14) > 40', exitLong: 'EMA(9) crosses below EMA(21)', entryShort: '', exitShort: '' });
     expect(s.entryLong.some(Boolean)).toBe(true);

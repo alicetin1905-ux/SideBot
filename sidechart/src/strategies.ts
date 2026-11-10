@@ -295,6 +295,272 @@ export const STRATEGIES: StrategyDef[] = [
     },
   },
   {
+    id: 'squeeze',
+    name: 'Squeeze Breakout (BB in Keltner)',
+    description:
+      'Volatiliteit loopt op als de Bollinger Bands binnen de Keltner Channels zakken (de "squeeze"). Zodra de squeeze loslaat: koop bij momentum omhoog, short bij momentum omlaag. Sluit als het momentum keert.',
+    params: [num('length', 'Lengte', 20), num('bbMult', 'BB StdDev', 2, 0.1, 0.1), num('kcMult', 'Keltner factor', 1.5, 0.1, 0.1)],
+    indicators: (p): IndRef[] => [
+      { id: 'bb', params: { length: p.length, mult: p.bbMult, source: 'close' } },
+      { id: 'keltner', params: { length: p.length, mult: p.kcMult, atr: p.length } },
+    ],
+    signals: (c, p) => {
+      const n = N(p, 'length');
+      const cl = close(c);
+      const bb = ta.bollinger(cl, n, N(p, 'bbMult'));
+      const mid = ta.ema(cl, n);
+      const a = ta.atr(c, n);
+      const squeeze = cl.map((_, i) => bb.upper[i] < mid[i] + N(p, 'kcMult') * a[i] && bb.lower[i] > mid[i] - N(p, 'kcMult') * a[i]);
+      // Momentum: price relative to the mid of the recent range and its average (like the TTM squeeze)
+      const hh = ta.highest(c.map((x) => x.high), n);
+      const ll = ta.lowest(c.map((x) => x.low), n);
+      const avg = ta.sma(cl, n);
+      const mom = ta.linreg(cl.map((v, i) => v - ((hh[i] + ll[i]) / 2 + avg[i]) / 2), n);
+      const s = blank(c.length);
+      for (let i = 1; i < c.length; i++) {
+        const fired = squeeze[i - 1] && !squeeze[i];
+        s.entryLong[i] = fired && mom[i] > 0;
+        s.entryShort[i] = fired && mom[i] < 0;
+        s.exitLong[i] = mom[i] < mom[i - 1] && mom[i - 1] >= (mom[i - 2] ?? -Infinity);
+        s.exitShort[i] = mom[i] > mom[i - 1] && mom[i - 1] <= (mom[i - 2] ?? Infinity);
+      }
+      return s;
+    },
+  },
+  {
+    id: 'chandelier',
+    name: 'Chandelier Exit (ATR trend)',
+    description: 'Trendvolger met een ATR-stop vanaf de hoogste high / laagste low. Koop als de prijs boven de short-stop breekt, short als hij onder de long-stop zakt.',
+    params: [num('length', 'Lengte', 22), num('mult', 'ATR factor', 3, 0.1, 0.1)],
+    indicators: (p): IndRef[] => [{ id: 'atr', params: { length: p.length } }],
+    signals: (c, p) => {
+      const n = N(p, 'length');
+      const a = ta.atr(c, n);
+      const hh = ta.highest(c.map((x) => x.close), n);
+      const ll = ta.lowest(c.map((x) => x.close), n);
+      const dir: number[] = new Array(c.length).fill(0);
+      let longStop = NaN;
+      let shortStop = NaN;
+      for (let i = 1; i < c.length; i++) {
+        const ls = hh[i] - N(p, 'mult') * a[i];
+        const ss = ll[i] + N(p, 'mult') * a[i];
+        longStop = c[i - 1].close > longStop ? Math.max(ls, longStop) : ls;
+        shortStop = c[i - 1].close < shortStop ? Math.min(ss, shortStop) : ss;
+        dir[i] = c[i].close > shortStop ? 1 : c[i].close < longStop ? -1 : dir[i - 1];
+      }
+      return fromEvents(c.length, (i) => i > 0 && dir[i] === 1 && dir[i - 1] !== 1, (i) => i > 0 && dir[i] === -1 && dir[i - 1] !== -1);
+    },
+  },
+  {
+    id: 'ema_ribbon',
+    name: 'EMA Ribbon (8/21/55)',
+    description: 'Koop als de drie EMA\'s netjes op volgorde liggen (8 > 21 > 55) en de prijs erboven staat; short omgekeerd. Sluit zodra de volgorde breekt.',
+    params: [num('fast', 'Snel', 8), num('mid', 'Midden', 21), num('slow', 'Traag', 55)],
+    indicators: (p): IndRef[] => [
+      { id: 'ema', params: { length: p.fast, source: 'close' } },
+      { id: 'ema', params: { length: p.mid, source: 'close' } },
+      { id: 'ema', params: { length: p.slow, source: 'close' } },
+    ],
+    signals: (c, p) => {
+      const cl = close(c);
+      const f = ta.ema(cl, N(p, 'fast'));
+      const m = ta.ema(cl, N(p, 'mid'));
+      const sl = ta.ema(cl, N(p, 'slow'));
+      const bull = cl.map((v, i) => v > f[i] && f[i] > m[i] && m[i] > sl[i]);
+      const bear = cl.map((v, i) => v < f[i] && f[i] < m[i] && m[i] < sl[i]);
+      const s = blank(c.length);
+      for (let i = 1; i < c.length; i++) {
+        s.entryLong[i] = bull[i] && !bull[i - 1];
+        s.entryShort[i] = bear[i] && !bear[i - 1];
+        s.exitLong[i] = f[i] < m[i];
+        s.exitShort[i] = f[i] > m[i];
+      }
+      return s;
+    },
+  },
+  {
+    id: 'hull_trend',
+    name: 'Hull MA Trend',
+    description: 'De Hull Moving Average reageert snel en glad. Koop als hij omhoog draait, short als hij omlaag draait.',
+    params: [num('length', 'Lengte', 55)],
+    indicators: (p): IndRef[] => [{ id: 'hma', params: { length: p.length, source: 'close' } }],
+    signals: (c, p) => {
+      const h = ta.hma(close(c), N(p, 'length'));
+      return fromEvents(
+        c.length,
+        (i) => i > 1 && h[i] > h[i - 1] && h[i - 1] <= h[i - 2],
+        (i) => i > 1 && h[i] < h[i - 1] && h[i - 1] >= h[i - 2],
+      );
+    },
+  },
+  {
+    id: 'keltner_breakout',
+    name: 'Keltner Breakout',
+    description: 'Koop bij een slot boven het bovenste Keltner Channel, short onder het onderste. Sluit terug bij de middenlijn.',
+    params: [num('length', 'Lengte', 20), num('mult', 'ATR factor', 2, 0.1, 0.1)],
+    indicators: (p): IndRef[] => [{ id: 'keltner', params: { length: p.length, mult: p.mult, atr: 10 } }],
+    signals: (c, p) => {
+      const cl = close(c);
+      const mid = ta.ema(cl, N(p, 'length'));
+      const a = ta.atr(c, 10);
+      const up = mid.map((m, i) => m + N(p, 'mult') * a[i]);
+      const dn = mid.map((m, i) => m - N(p, 'mult') * a[i]);
+      const s = blank(c.length);
+      for (let i = 0; i < c.length; i++) {
+        s.entryLong[i] = ta.crossover(cl, up, i);
+        s.entryShort[i] = ta.crossunder(cl, dn, i);
+        s.exitLong[i] = ta.crossunder(cl, mid, i);
+        s.exitShort[i] = ta.crossover(cl, mid, i);
+      }
+      return s;
+    },
+  },
+  {
+    id: 'vwap_trend',
+    name: 'VWAP Trend (intraday)',
+    description: 'Voor korte timeframes: koop als de prijs boven de dag-VWAP kruist terwijl de EMA stijgt, short omgekeerd. Sluit bij een kruising terug door de VWAP.',
+    params: [num('ema', 'Trend EMA', 50)],
+    indicators: (p): IndRef[] => [
+      { id: 'vwap', params: { anchor: 'Session', source: 'hlc3' } },
+      { id: 'ema', params: { length: p.ema, source: 'close' } },
+    ],
+    signals: (c, p) => {
+      const cl = close(c);
+      const v = ta.vwap(c, 'Session', ta.source(c, 'hlc3'));
+      const e = ta.ema(cl, N(p, 'ema'));
+      const s = blank(c.length);
+      for (let i = 1; i < c.length; i++) {
+        s.entryLong[i] = ta.crossover(cl, v, i) && e[i] > e[i - 1];
+        s.entryShort[i] = ta.crossunder(cl, v, i) && e[i] < e[i - 1];
+        s.exitLong[i] = ta.crossunder(cl, v, i);
+        s.exitShort[i] = ta.crossover(cl, v, i);
+      }
+      return s;
+    },
+  },
+  {
+    id: 'zscore_revert',
+    name: 'Z-score Mean Reversion',
+    description: 'Hoe ver staat de prijs van zijn gemiddelde, in standaarddeviaties? Koop bij een extreme onderschrijding, short bij een extreme overschrijding. Sluit terug bij het gemiddelde.',
+    params: [num('length', 'Lengte', 50), num('z', 'Instap bij z', 2, 0.1, 0.5), num('exitZ', 'Uitstap bij z', 0, 0.1, 0)],
+    indicators: (p): IndRef[] => [{ id: 'bb', params: { length: p.length, mult: p.z, source: 'close' } }],
+    signals: (c, p) => {
+      const cl = close(c);
+      const m = ta.sma(cl, N(p, 'length'));
+      const sd = ta.stdev(cl, N(p, 'length'));
+      const z = cl.map((v, i) => (sd[i] > 0 ? (v - m[i]) / sd[i] : 0));
+      const zt = N(p, 'z');
+      const zx = N(p, 'exitZ');
+      const s = blank(c.length);
+      for (let i = 1; i < c.length; i++) {
+        s.entryLong[i] = z[i] <= -zt && z[i - 1] > -zt;
+        s.entryShort[i] = z[i] >= zt && z[i - 1] < zt;
+        s.exitLong[i] = z[i] >= -zx;
+        s.exitShort[i] = z[i] <= zx;
+      }
+      return s;
+    },
+  },
+  {
+    id: 'orb',
+    name: 'Opening Range Breakout (UTC dag)',
+    description:
+      'Voor intraday: de high/low van de eerste N bars van de dag (UTC) vormen de "opening range". Koop bij een uitbraak erboven, short eronder. Sluit aan het einde van de dag of bij terugval door het midden.',
+    params: [num('bars', 'Bars in opening range', 4)],
+    signals: (c, p) => {
+      const n = N(p, 'bars');
+      const s = blank(c.length);
+      let day = -1;
+      let count = 0;
+      let hi = -Infinity;
+      let lo = Infinity;
+      let traded = false;
+      for (let i = 0; i < c.length; i++) {
+        const d = Math.floor(c[i].time / 86400);
+        if (d !== day) {
+          if (i > 0) {
+            s.exitLong[i - 1] = true; // flat at the end of the day
+            s.exitShort[i - 1] = true;
+          }
+          day = d;
+          count = 0;
+          hi = -Infinity;
+          lo = Infinity;
+          traded = false;
+        }
+        count++;
+        if (count <= n) {
+          hi = Math.max(hi, c[i].high);
+          lo = Math.min(lo, c[i].low);
+          continue;
+        }
+        const mid = (hi + lo) / 2;
+        if (!traded && c[i].close > hi) {
+          s.entryLong[i] = true;
+          traded = true;
+        } else if (!traded && c[i].close < lo) {
+          s.entryShort[i] = true;
+          traded = true;
+        }
+        if (c[i].close < mid) s.exitLong[i] = true;
+        if (c[i].close > mid) s.exitShort[i] = true;
+      }
+      return s;
+    },
+  },
+  {
+    id: 'heikin_trend',
+    name: 'Heikin Ashi Trend',
+    description: 'Heikin Ashi-candles filteren ruis. Koop na N groene HA-candles op rij boven de EMA, short na N rode eronder. Sluit bij de eerste candle in de andere kleur.',
+    params: [num('streak', 'Candles op rij', 2), num('ema', 'Trend EMA', 50)],
+    indicators: (p): IndRef[] => [{ id: 'ema', params: { length: p.ema, source: 'close' } }],
+    signals: (c, p) => {
+      const ha = ta.heikinAshi(c);
+      const e = ta.ema(close(c), N(p, 'ema'));
+      const k = N(p, 'streak');
+      const green = ha.map((x) => x.close > x.open);
+      const s = blank(c.length);
+      for (let i = k; i < c.length; i++) {
+        let up = true;
+        let down = true;
+        for (let j = 0; j < k; j++) {
+          up = up && green[i - j];
+          down = down && !green[i - j];
+        }
+        s.entryLong[i] = up && !green[i - k] && c[i].close > e[i];
+        s.entryShort[i] = down && green[i - k] && c[i].close < e[i];
+        s.exitLong[i] = !green[i];
+        s.exitShort[i] = green[i];
+      }
+      return s;
+    },
+  },
+  {
+    id: 'macd_rsi',
+    name: 'MACD + RSI Combo',
+    description: 'Koop als MACD boven de signaallijn kruist én de RSI boven 50 staat (momentum bevestigd); short omgekeerd. Sluit bij de tegengestelde MACD-kruising.',
+    params: [num('fast', 'MACD snel', 12), num('slow', 'MACD traag', 26), num('signal', 'Signaal', 9), num('rsi', 'RSI lengte', 14)],
+    indicators: (p): IndRef[] => [
+      { id: 'macd', params: { fast: p.fast, slow: p.slow, signal: p.signal, source: 'close' } },
+      { id: 'rsi', params: { length: p.rsi, source: 'close' } },
+    ],
+    signals: (c, p) => {
+      const cl = close(c);
+      const m = ta.macd(cl, N(p, 'fast'), N(p, 'slow'), N(p, 'signal'));
+      const r = ta.rsi(cl, N(p, 'rsi'));
+      const s = blank(c.length);
+      for (let i = 0; i < c.length; i++) {
+        const up = ta.crossover(m.macd, m.signal, i);
+        const dn = ta.crossunder(m.macd, m.signal, i);
+        s.entryLong[i] = up && r[i] > 50;
+        s.entryShort[i] = dn && r[i] < 50;
+        s.exitLong[i] = dn;
+        s.exitShort[i] = up;
+      }
+      return s;
+    },
+  },
+  {
     id: 'custom',
     name: 'Eigen regels (no-code)',
     description:
@@ -314,7 +580,7 @@ export const RULE_HELP = `Operanden: close, open, high, low, volume, hl2, hlc3, 
 SMA(n) EMA(n) WMA(n) HMA(n) VWAP RSI(n) ATR(n) CCI(n) MFI(n) WILLR(n) ROC(n) OBV
 ADX(n) PLUSDI(n) MINUSDI(n) MACD(f,s,sig) MACDSIGNAL(f,s,sig) MACDHIST(f,s,sig)
 BBUPPER(n,k) BBMID(n,k) BBLOWER(n,k) STOCHK(n,k,d) STOCHD(n,k,d)
-HIGHEST(n) LOWEST(n) SUPERTREND(n,f) PSAR  — gebruik PREV(...) voor de vorige bar
+HIGHEST(n) LOWEST(n) SUPERTREND(n,f) PSAR VOLSMA(n) (gemiddeld volume)  — gebruik PREV(...) voor de vorige bar
 Futures: FUNDING = funding rate in % per periode (echte historie), bv. FUNDING > 0.03
 Operatoren: crosses above, crosses below, >, <, >=, <=
 Combineer met AND / OR, bv: EMA(9) crosses above EMA(21) AND RSI(14) > 50`;
@@ -357,6 +623,7 @@ function operand(c: Candle[], raw: string, cache: Map<string, Series>, ext: ExtD
         case 'WMA': out = ta.wma(cl, arg(0, 20)); break;
         case 'HMA': out = ta.hma(cl, arg(0, 20)); break;
         case 'RSI': out = ta.rsi(cl, arg(0, 14)); break;
+        case 'VOLSMA': out = ta.sma(c.map((x) => x.volume), arg(0, 20)); break;
         case 'ATR': out = ta.atr(c, arg(0, 14)); break;
         case 'CCI': out = ta.cci(c, arg(0, 20)); break;
         case 'MFI': out = ta.mfi(c, arg(0, 14)); break;
@@ -431,6 +698,55 @@ export function evalRule(c: Candle[], rule: string, cache = new Map<string, Seri
   }
   return res;
 }
+
+/** Ready-made rule sets the user can load into the no-code editor. */
+export const RULE_EXAMPLES: { name: string; rules: CustomRules }[] = [
+  {
+    name: 'EMA-kruising met RSI-filter',
+    rules: {
+      entryLong: 'EMA(9) crosses above EMA(21) AND RSI(14) > 50',
+      exitLong: 'EMA(9) crosses below EMA(21)',
+      entryShort: 'EMA(9) crosses below EMA(21) AND RSI(14) < 50',
+      exitShort: 'EMA(9) crosses above EMA(21)',
+    },
+  },
+  {
+    name: 'Funding-extreem tegen de trend in',
+    rules: {
+      entryLong: 'FUNDING < -0.01 AND close > EMA(200)',
+      exitLong: 'FUNDING > 0.01',
+      entryShort: 'FUNDING > 0.03 AND close < EMA(50)',
+      exitShort: 'FUNDING < 0.005',
+    },
+  },
+  {
+    name: 'Bollinger bounce',
+    rules: {
+      entryLong: 'close crosses above BBLOWER(20,2) AND RSI(14) < 40',
+      exitLong: 'close crosses above BBMID(20,2)',
+      entryShort: 'close crosses below BBUPPER(20,2) AND RSI(14) > 60',
+      exitShort: 'close crosses below BBMID(20,2)',
+    },
+  },
+  {
+    name: 'Breakout met volume',
+    rules: {
+      entryLong: 'close > HIGHEST(20) AND volume > VOLSMA(20)',
+      exitLong: 'close < LOWEST(10)',
+      entryShort: 'close < LOWEST(20) AND volume > VOLSMA(20)',
+      exitShort: 'close > HIGHEST(10)',
+    },
+  },
+  {
+    name: 'Trend + pullback (ADX)',
+    rules: {
+      entryLong: 'ADX(14) > 25 AND PLUSDI(14) > MINUSDI(14) AND RSI(14) crosses above 50',
+      exitLong: 'PLUSDI(14) crosses below MINUSDI(14)',
+      entryShort: 'ADX(14) > 25 AND MINUSDI(14) > PLUSDI(14) AND RSI(14) crosses below 50',
+      exitShort: 'MINUSDI(14) crosses below PLUSDI(14)',
+    },
+  },
+];
 
 export interface CustomRules {
   entryLong: string;

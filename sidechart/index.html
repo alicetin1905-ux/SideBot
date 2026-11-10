@@ -192,10 +192,19 @@
             <p id="strategy-desc" class="muted"></p>
             <div id="strategy-params" class="param-grid"></div>
             <div id="custom-rules" class="custom-rules" hidden>
+              <select id="rule-example" title="Laad een voorbeeld in de editor"><option value="">📋 Voorbeeld laden…</option></select>
               <label>Long entry <input id="rule-el" placeholder="EMA(9) crosses above EMA(21)" /></label>
               <label>Long exit <input id="rule-xl" placeholder="EMA(9) crosses below EMA(21)" /></label>
               <label>Short entry <input id="rule-es" placeholder="FUNDING > 0.05 AND close < EMA(50)" /></label>
               <label>Short exit <input id="rule-xs" placeholder="FUNDING < 0.01" /></label>
+              <div class="row save-row">
+                <input id="save-name" class="grow" placeholder="Naam, bv. Mijn BTC scalp" maxlength="40" />
+                <button class="btn small" id="btn-save-strategy" title="Bewaar deze regels als eigen strategie">💾 Opslaan</button>
+              </div>
+              <div class="row" id="saved-actions" hidden>
+                <span class="muted">Wijzigingen worden automatisch bewaard.</span>
+                <button class="btn small" id="btn-delete-strategy">🗑 Verwijderen</button>
+              </div>
               <details><summary>Hoe schrijf ik regels?</summary><pre id="rule-help"></pre></details>
             </div>
 
