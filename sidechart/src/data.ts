@@ -72,6 +72,7 @@ export function resample(candles: Candle[], tf: Timeframe): Candle[] {
       last.low = Math.min(last.low, c.low);
       last.close = c.close;
       last.volume += c.volume;
+      if (c.buyVolume !== undefined) last.buyVolume = (last.buyVolume ?? 0) + c.buyVolume;
     } else {
       out.push({ ...c, time: t });
     }

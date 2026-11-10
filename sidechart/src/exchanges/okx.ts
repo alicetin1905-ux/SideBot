@@ -66,23 +66,56 @@ export const okxExchange: Exchange = {
   },
 
   async klines(c, interval, maxBars, onProgress) {
-    const bar = BARS[interval][0];
-    let all: Candle[] = [];
-    let after = '';
-    while (all.length < maxBars) {
-      const rows = await okx<string[][]>(
-        `/market/history-candles?instId=${c.instId}&bar=${bar}&limit=100${after ? `&after=${after}` : ''}`,
+    const [bar, sec] = BARS[interval];
+    const page = (after?: number) =>
+      okx<string[][]>(`/market/history-candles?instId=${c.instId}&bar=${bar}&limit=100${after ? `&after=${after}` : ''}`).then((rows) =>
+        rows.map(row),
       );
-      if (!rows.length) break;
-      const chunk = rows.map(row).reverse(); // OKX returns newest first
-      all = chunk.concat(all);
-      onProgress?.(all.length);
-      after = rows[rows.length - 1][0];
-      if (rows.length < 100) break;
-      await sleep(110); // stay under 20 requests / 2 s
+    const first = await page();
+    let all = first;
+    onProgress?.(all.length);
+    const pages = Math.ceil(maxBars / 100) - 1;
+    if (first.length === 100 && pages > 0) {
+      const newestMs = Math.max(...first.map((x) => x.time)) * 1000;
+      if (interval === '1M') {
+        // Months have no fixed length: page sequentially.
+        let after = Math.min(...first.map((x) => x.time)) * 1000;
+        for (let k = 0; k < pages; k++) {
+          const rows = await page(after);
+          if (!rows.length) break;
+          all = all.concat(rows);
+          onProgress?.(all.length);
+          after = Math.min(...rows.map((x) => x.time)) * 1000;
+          await sleep(110);
+        }
+      } else {
+        // Candles are evenly spaced, so page boundaries can be computed and fetched in parallel
+        // (8 at a time, under OKX's limit of 20 requests per 2 seconds).
+        const anchors = Array.from({ length: pages }, (_, k) => newestMs - (k + 1) * 100 * sec * 1000 + 1);
+        for (let i = 0; i < anchors.length; i += 8) {
+          const batch = await Promise.all(anchors.slice(i, i + 8).map((a) => page(a)));
+          const rows = batch.flat();
+          all = all.concat(rows);
+          onProgress?.(all.length);
+          if (batch.some((r) => r.length < 100)) break; // reached the listing date
+          await sleep(850);
+        }
+      }
     }
-    // de-duplicate (the live bar can appear twice at page edges)
-    all = all.filter((x, i) => i === 0 || x.time !== all[i - 1].time);
+    // Sort oldest-first and de-duplicate (pages overlap when the exchange skipped a candle).
+    const dedupe = () => {
+      all.sort((x, y) => x.time - y.time);
+      all = all.filter((x, i) => i === 0 || x.time !== all[i - 1].time);
+    };
+    dedupe();
+    // Missing candles make the computed pages cover slightly fewer bars: top up from the oldest one.
+    for (let k = 0; k < 5 && all.length < maxBars && all.length >= 100; k++) {
+      const rows = await page(all[0].time * 1000);
+      if (!rows.length) break;
+      all = all.concat(rows);
+      dedupe();
+      if (rows.length < 100) break;
+    }
     return all.slice(-maxBars);
   },
 

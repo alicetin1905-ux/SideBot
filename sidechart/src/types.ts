@@ -6,6 +6,8 @@ export interface Candle {
   low: number;
   close: number;
   volume: number;
+  /** Taker buy volume in base coin (only exchanges that include it in candles, e.g. Binance) */
+  buyVolume?: number;
 }
 
 /** A series of values aligned with the candle array. NaN = no value. */

@@ -407,6 +407,11 @@ function neededExt(): ExtKind[] {
     if (def.id === 'custom') for (const k of rulesExternal(state.strategy.rules)) set.add(k);
     if (state.strategy.settings.funding === 'history') set.add('funding');
   }
+  // Binance candles already contain taker volume.
+  if (ex().candleTakerVolume) {
+    set.delete('takerBuy');
+    set.delete('takerSell');
+  }
   return [...set];
 }
 
@@ -428,13 +433,24 @@ async function ensureExt(force = false) {
           .catch((e) => toast(`Funding-historie: ${(e as Error).message}`, true)),
       );
     }
-    if (missing.includes('oi')) next.oi = openInterestHistory(state.exchange, state.symbol);
-    if (missing.some((k) => k === 'lsr' || k === 'takerBuy' || k === 'takerSell')) {
+    // Open interest / long-short history straight from the exchange when it offers it to browsers.
+    const direct = missing.filter((k) => (k === 'oi' || k === 'lsr') && ex().ext.includes(k) && ex().extSeries);
+    for (const k of direct) {
+      jobs.push(
+        ex()
+          .extSeries!(c, k, baseInterval)
+          .then((pts) => void (next[k] = k === 'oi' && ex().oiInCoins ? coinsToUsd(pts) : pts))
+          .catch((e) => toast(`${extName(k)}: ${(e as Error).message}`, true)),
+      );
+    }
+    if (missing.includes('oi') && !direct.includes('oi')) next.oi = openInterestHistory(state.exchange, state.symbol);
+    const viaBitget = missing.filter((k) => (k === 'lsr' && !direct.includes('lsr')) || k === 'takerBuy' || k === 'takerSell');
+    if (viaBitget.length) {
       jobs.push(
         fetchSentiment(state.symbol, baseInterval)
           .then((sent) => {
             if (!sent.lsr.length && !sent.takerBuy.length) toast(`Geen long/short- of taker-data voor ${state.symbol} bij Bitget`, true);
-            Object.assign(next, sent);
+            for (const k of viaBitget) next[k] = sent[k as keyof typeof sent];
           })
           .catch((e) => toast(`Sentiment-data: ${(e as Error).message}`, true)),
       );
@@ -449,6 +465,15 @@ async function ensureExt(force = false) {
   chart.setExt(ext);
   updateLegend();
   if (state.strategy.enabled) runStrategy();
+}
+
+/** Convert a coin-denominated series to USD using the close of the candle it falls in. */
+function coinsToUsd(pts: { time: number; value: number }[]) {
+  let i = 0;
+  return pts.map((p) => {
+    while (i + 1 < baseCandles.length && baseCandles[i + 1].time <= p.time) i++;
+    return { time: p.time, value: p.value * (baseCandles[i]?.close ?? NaN) };
+  });
 }
 
 function extName(k: ExtKind) {
@@ -481,7 +506,7 @@ async function refreshStats() {
     renderHud();
     // Build open-interest history while the app is open (exchanges don't offer it to browsers).
     const oi = recordOpenInterest(state.exchange, state.symbol, s.openInterestUsd);
-    if (ext.oi) {
+    if (ext.oi && !ex().ext.includes('oi')) {
       ext = { ...ext, oi };
       chart.setExt(ext);
     }
@@ -569,7 +594,7 @@ async function loadSymbolList() {
     $('#symbol-list').innerHTML = list
       .slice()
       .sort((a, b) => a.symbol.localeCompare(b.symbol))
-      .map((s) => `<option value="${s.symbol}">${s.base} perpetual · max ${s.maxLeverage}×</option>`)
+      .map((s) => `<option value="${s.symbol}">${s.base} perpetual${s.maxLeverage ? ` · max ${s.maxLeverage}×` : ''}</option>`)
       .join('');
   } catch {
     /* the input still accepts any symbol */
@@ -624,7 +649,7 @@ function renderMarkets() {
     (favs.length ? `<li class="market-sep">★ Favorieten</li>${favs.map(row).join('')}<li class="market-sep">Alle contracten</li>` : '') +
     (rest.map(row).join('') || '<li class="empty">Niets gevonden</li>');
   if (sort === 'funding' && !markets.some((m) => m.fundingRate !== undefined)) {
-    ul.insertAdjacentHTML('afterbegin', '<li class="empty">Funding per contract in deze lijst is alleen beschikbaar op Bitget</li>');
+    ul.insertAdjacentHTML('afterbegin', '<li class="empty">Funding per contract in deze lijst is niet beschikbaar op OKX</li>');
   }
 }
 

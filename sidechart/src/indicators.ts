@@ -34,6 +34,17 @@ export function align(c: Candle[], pts: Point[] | undefined, mode: 'step' | 'sum
   return out;
 }
 
+/** Taker buy/sell volume: straight from the candles when the exchange includes it (Binance), else external data. */
+function takerVolumes(c: Candle[], ext: ExtData): { b: Series; s: Series } {
+  if (c.length && c[c.length - 1].buyVolume !== undefined) {
+    return {
+      b: c.map((x) => x.buyVolume ?? NaN),
+      s: c.map((x) => (x.buyVolume === undefined ? NaN : x.volume - x.buyVolume)),
+    };
+  }
+  return { b: align(c, ext.takerBuy, 'sum'), s: align(c, ext.takerSell, 'sum') };
+}
+
 export interface OutputDef {
   key: string;
   label: string;
@@ -105,7 +116,7 @@ export const INDICATORS: IndicatorDef[] = [
   },
   {
     id: 'oi',
-    name: 'Open Interest (USD, live opgenomen)',
+    name: 'Open Interest',
     category: 'Futures',
     overlay: false,
     external: ['oi'],
@@ -121,7 +132,7 @@ export const INDICATORS: IndicatorDef[] = [
   },
   {
     id: 'oidelta',
-    name: 'Open Interest Delta (live opgenomen)',
+    name: 'Open Interest Delta',
     category: 'Futures',
     overlay: false,
     external: ['oi'],
@@ -135,7 +146,7 @@ export const INDICATORS: IndicatorDef[] = [
   },
   {
     id: 'lsr',
-    name: 'Long/Short Ratio (accounts, via Bitget)',
+    name: 'Long/Short Ratio (accounts)',
     category: 'Futures',
     overlay: false,
     external: ['lsr'],
@@ -146,7 +157,7 @@ export const INDICATORS: IndicatorDef[] = [
   },
   {
     id: 'takerdelta',
-    name: 'Taker Buy/Sell Delta (via Bitget)',
+    name: 'Taker Buy/Sell Delta',
     category: 'Futures',
     overlay: false,
     external: ['takerBuy', 'takerSell'],
@@ -154,22 +165,20 @@ export const INDICATORS: IndicatorDef[] = [
     outputs: [{ key: 'value', label: 'Delta', type: 'histogram', color: '#00ffa3', colorBy: 'sign' }],
     levels: [0],
     compute: (c, _p, ext) => {
-      const b = align(c, ext.takerBuy, 'sum');
-      const s = align(c, ext.takerSell, 'sum');
+      const { b, s } = takerVolumes(c, ext);
       return { value: b.map((x, i) => x - s[i]) };
     },
   },
   {
     id: 'cvd',
-    name: 'Cumulative Volume Delta (via Bitget)',
+    name: 'Cumulative Volume Delta (CVD)',
     category: 'Futures',
     overlay: false,
     external: ['takerBuy', 'takerSell'],
     params: [],
     outputs: [{ key: 'value', label: 'CVD', type: 'line', color: '#00ffa3', lineWidth: 2 }],
     compute: (c, _p, ext) => {
-      const b = align(c, ext.takerBuy, 'sum');
-      const s = align(c, ext.takerSell, 'sum');
+      const { b, s } = takerVolumes(c, ext);
       let acc = 0;
       let started = false;
       return {

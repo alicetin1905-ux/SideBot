@@ -99,7 +99,7 @@ export const bitgetExchange: Exchange = {
         // A snapshot contains many bars; only the latest two matter for a live update.
         for (const k of rows.slice(-2)) onCandle(k);
       },
-      25000,
+      { pingMs: 25000 },
     );
   },
 

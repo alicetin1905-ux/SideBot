@@ -1,7 +1,7 @@
 # SideChart · Futures Terminal
 
 A futuristic chart-and-backtest terminal for **crypto perpetual futures** (USDT-margined),
-running entirely in the browser. It uses live data from **OKX** and **Bitget**: no account, API key or server needed.
+running entirely in the browser. It uses live data from **Binance**, **Bybit**, **OKX** and **Bitget**: no account, API key or server needed.
 
 > SideChart is a self-built app and has nothing to do with TradingView. The chart itself is drawn
 > with the open-source library [Lightweight Charts™](https://github.com/tradingview/lightweight-charts) (Apache 2.0).
@@ -18,30 +18,33 @@ npm run dev        # open http://localhost:5173
 
 ```bash
 npm run build      # static files in sidechart/dist/ (GitHub Pages, Netlify, Vercel, …)
-npm test           # 91 unit tests (indicators, strategies, futures backtester, calculator)
+npm test           # 104 unit tests (indicators, strategies, futures backtester, calculator, exchange adapters)
 ```
 
 ## Features
 
 **Futures data (live)**
-- All USDT perpetuals on OKX (500+) and Bitget (800+); switch exchange at the top left.
+- All USDT perpetuals on Binance (USDⓈ-M), Bybit (linear), OKX and Bitget; switch exchange at the top left.
 - HUD bar: last price (flashes green/red), mark price, index price, **funding rate with countdown**,
   open interest, 24h change, high/low and volume.
 - **Markets screener:** all contracts, sortable by volume, gainers, losers and funding, with favorites.
-- **Liquidation feed** (OKX, live): every liquidation, with a long/short total for the last hour
-  and large liquidations highlighted.
+- **Live liquidation feed** (Binance: all contracts, OKX: all contracts, Bybit: the 100 largest contracts),
+  with a long/short total for the last hour and large liquidations highlighted. Bitget has no public feed.
 
 **Futures indicators**
 
-| Indicator | Source | Note |
-|---|---|---|
-| Funding Rate (per period or annualized) | exchange | ~3 months of real history, usable in backtests |
-| Open Interest + OI Delta | recorded live | builds up while the app is open (stored in your browser) |
-| Long/Short Ratio (accounts) | Bitget | latest ~30 periods, grows over time |
-| Taker Buy/Sell Delta + CVD | Bitget | latest ~30 periods, grows over time |
+What each exchange provides:
 
-Exchanges don't offer deep open-interest and long/short history to browsers. That's why
-those indicators are for live analysis and are not used in backtests.
+| Data | Binance | Bybit | OKX | Bitget |
+|---|---|---|---|---|
+| Funding history (backtestable) | ✅ | ✅ | ✅ ~3 months | ✅ |
+| Open interest history | ✅ ~30 days | ✅ (converted to USD) | recorded live | recorded live |
+| Long/short ratio (accounts) | ✅ ~30 days | ✅ | via Bitget (recent) | ✅ recent |
+| Taker buy/sell + **CVD** | ✅ **full history** (from the candles) | via Bitget (recent) | via Bitget (recent) | ✅ recent |
+| Liquidations | ✅ | ✅ top 100 | ✅ | — |
+| Max leverage per contract | — (requires a login) | ✅ | ✅ | ✅ |
+
+"Recorded live" means the app records open interest itself while it's open (stored in your browser).
 
 There are also 44 technical indicators: RSI, MACD, Bollinger, Ichimoku, SuperTrend, VWAP, ADX, ATR, OBV and more.
 
@@ -80,6 +83,10 @@ works on mobile.
 - A good backtest is **no guarantee** of future results, and the optimizer can cause overfitting.
 - The backtester holds one position at a time and uses the mark of the last bar as its price. In reality,
   exchanges liquidate on the mark price, and fees and maintenance margin depend on your tier.
+- **Binance and Bybit block some regions** (including the US, and for Bybit also some EU countries). If so, the app
+  shows a clear message ("blocks requests from your location") and you can use OKX or Bitget instead.
+  I couldn't fetch Binance and Bybit live from the build server (blocked region): their integration is built
+  from the official API documentation and tested with simulated responses in exactly that format.
 - In some countries (including parts of the EU), exchanges don't allow retail customers to trade derivatives.
   Market data still works.
 - This is an analysis tool, not financial advice. It places no orders.
@@ -90,7 +97,7 @@ works on mobile.
 sidechart/src/
   main.ts            app logic and user interface
   chart.ts           chart, panes, drawings, position lines
-  exchanges/         OKX and Bitget (contracts, candles, live stream, funding, liquidations)
+  exchanges/         Binance, Bybit, OKX and Bitget (contracts, candles, live stream, funding, OI, liquidations)
   sentiment.ts       open-interest recorder + Bitget long/short & taker data
   futures.ts         position calculator
   backtest.ts        futures backtester (leverage, liquidation, funding) + optimizer
