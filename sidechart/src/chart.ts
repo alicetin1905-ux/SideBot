@@ -595,8 +595,7 @@ export class ChartView {
     const cls = c.close >= c.open ? 'up' : 'down';
     let html = `<span class="${cls}">O <b>${f(c.open)}</b> H <b>${f(c.high)}</b> L <b>${f(c.low)}</b> C <b>${f(c.close)}</b> <b>${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</b></span>`;
     for (const ind of this.indicators) {
-      if (ind.hidden) continue;
-      const vals = ind.def.outputs
+      const vals = ind.hidden ? '' : ind.def.outputs
         .map((o) => {
           const off = resolveOffset(o, ind.params);
           const v = ind.values[o.key]?.[idx - off];
@@ -605,7 +604,16 @@ export class ChartView {
         .filter(Boolean)
         .join(' ');
       const p = Object.values(ind.params).join(', ');
-      html += `<div class="legend-ind">${ind.def.id.toUpperCase()}${p ? ` (${p})` : ''} ${vals}</div>`;
+      const btn = (act: string, icon: string, title: string) =>
+        `<button class="legend-btn" data-act="${act}" title="${title}" aria-label="${title}">${icon}</button>`;
+      html +=
+        `<div class="legend-ind${ind.hidden ? ' is-hidden' : ''}" data-uid="${ind.uid}">` +
+        `<span class="legend-name">${ind.fromStrategy ? '⚡' : ''}${ind.def.id.toUpperCase()}${p ? ` (${p})` : ''}</span> ${vals}` +
+        `<span class="legend-actions">` +
+        btn('toggle', ind.hidden ? '◌' : '👁', ind.hidden ? 'Tonen' : 'Verbergen') +
+        (ind.def.params.length ? btn('edit', '⚙', 'Instellingen') : '') +
+        btn('remove', '✕', 'Sluiten') +
+        `</span></div>`;
     }
     return html;
   }

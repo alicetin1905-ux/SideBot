@@ -425,6 +425,65 @@ optgroup {
 }
 .legend-ind {
   color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  width: fit-content;
+  max-width: 100%;
+  padding: 1px 4px 1px 2px;
+  margin-left: -2px;
+  border-radius: 4px;
+  pointer-events: auto; /* the legend itself lets clicks through to the chart; indicator rows don't */
+}
+.legend-ind:hover {
+  background: rgba(3, 8, 20, 0.85);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.legend-ind.is-hidden .legend-name {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+.legend-actions {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 4px;
+  visibility: hidden;
+}
+.legend-ind:hover .legend-actions,
+.legend-ind:focus-within .legend-actions {
+  visibility: visible;
+}
+.legend-btn {
+  background: rgba(0, 229, 255, 0.08);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 4px;
+  font: 600 11px var(--mono);
+  line-height: 1;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 4px;
+  cursor: pointer;
+}
+.legend-btn:hover {
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+.legend-btn[data-act='remove']:hover {
+  border-color: var(--down);
+  color: var(--down);
+}
+/* Touch screens have no hover: always show the buttons, a bit larger */
+@media (hover: none) {
+  .legend-actions {
+    visibility: visible;
+  }
+  .legend-btn {
+    min-width: 28px;
+    height: 26px;
+    font-size: 13px;
+  }
 }
 .status {
   position: absolute;

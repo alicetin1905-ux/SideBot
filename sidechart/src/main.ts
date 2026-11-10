@@ -905,23 +905,45 @@ function setupIndicatorUi() {
     void ensureExt();
   });
 
-  $('#active-indicators').addEventListener('click', async (e) => {
+  $('#active-indicators').addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-act]');
-    const li = (e.target as HTMLElement).closest<HTMLElement>('[data-uid]');
-    if (!btn || !li) return;
-    const uid = Number(li.dataset.uid);
-    const ind = chart.indicators.find((i) => i.uid === uid);
-    if (!ind) return;
-    if (btn.dataset.act === 'remove') chart.removeIndicator(uid);
-    if (btn.dataset.act === 'toggle') chart.toggleIndicator(uid);
-    if (btn.dataset.act === 'edit') {
-      const p = await editParams(ind.def.name, ind.def.params, ind.params);
-      if (p) chart.updateIndicator(uid, p);
-    }
-    renderActiveIndicators();
-    updateLegend();
-    save();
+    const row = (e.target as HTMLElement).closest<HTMLElement>('[data-uid]');
+    if (btn && row) void indicatorAction(Number(row.dataset.uid), btn.dataset.act!);
   });
+  // Buttons in the chart legend. pointerdown instead of click: the legend is re-rendered
+  // on live ticks, which could swallow a click between press and release.
+  $('#legend').addEventListener('pointerdown', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-act]');
+    const row = (e.target as HTMLElement).closest<HTMLElement>('[data-uid]');
+    if (!btn || !row) return;
+    e.preventDefault();
+    e.stopPropagation();
+    void indicatorAction(Number(row.dataset.uid), btn.dataset.act!);
+  });
+}
+
+async function indicatorAction(uid: number, act: string) {
+  const ind = chart.indicators.find((i) => i.uid === uid);
+  if (!ind) return;
+  if (act === 'remove') {
+    if (ind.fromStrategy) {
+      // Strategy indicators come back on every backtest, so switch them all off instead.
+      state.strategy.showIndicators = false;
+      $<HTMLInputElement>('#show-ind').checked = false;
+      chart.removeStrategyIndicators();
+      toast('Strategie-indicatoren verborgen (vink "indicatoren" aan in de Strategy Tester om ze terug te zetten)');
+    } else {
+      chart.removeIndicator(uid);
+    }
+  }
+  if (act === 'toggle') chart.toggleIndicator(uid);
+  if (act === 'edit') {
+    const p = await editParams(ind.def.name, ind.def.params, ind.params);
+    if (p) chart.updateIndicator(uid, p);
+  }
+  renderActiveIndicators();
+  updateLegend();
+  save();
 }
 
 // ============================================================================
