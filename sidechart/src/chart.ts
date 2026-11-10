@@ -249,12 +249,21 @@ export class ChartView {
     this.main.applyOptions({ priceFormat: { type: 'price', precision, minMove: 1 / 10 ** precision } });
   }
 
+  /**
+   * Turn auto-scaling back on for every pane. Dragging or zooming a price axis switches it off,
+   * which would otherwise keep the previous coin's price range after switching symbols.
+   */
+  resetScales() {
+    for (const pane of this.chart.panes()) pane.priceScale('right').applyOptions({ autoScale: true });
+  }
+
   setCandles(candles: Candle[], barSeconds: number) {
     this.candles = candles;
     this.barSeconds = barSeconds;
     this.applyPrecision();
     this.renderMain();
     this.refreshIndicators();
+    this.resetScales();
     this.chart.timeScale().applyOptions({ secondsVisible: barSeconds < 60 });
     this.chart.timeScale().scrollToRealTime();
   }
@@ -270,6 +279,7 @@ export class ChartView {
   fitContent() {
     const n = this.candles.length;
     this.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 150), to: n + 8 });
+    this.resetScales();
   }
 
   // ---------------------------------------------------------------- indicators

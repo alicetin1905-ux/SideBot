@@ -956,8 +956,12 @@ function setupTools() {
   };
   chart.onAlertPick = (price) => addAlert(price);
   $('#btn-clear-drawings').addEventListener('click', () => chart.clearDrawings());
+  $('#btn-autoscale').addEventListener('click', () => chart.fitContent());
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && chart.tool !== 'none') setTool('none');
+    // "A" = auto-scale (ignored while typing in a field)
+    const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement;
+    if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'a') chart.fitContent();
   });
   $('#btn-notify').addEventListener('click', async () => {
     if (!('Notification' in window)) return toast('Je browser ondersteunt geen meldingen', true);
