@@ -3,7 +3,10 @@ import type { Candle } from './types';
 import * as ta from './ta';
 import { INDICATORS, defaultParams } from './indicators';
 import { STRATEGIES, defaultParamsFor, customSignals, evalRule } from './test-helpers';
-import { DEFAULT_SETTINGS, optimize, runBacktest } from './backtest';
+import { DEFAULT_SETTINGS, fundingEvents, liquidationPrice, optimize, runBacktest } from './backtest';
+import { align } from './indicators';
+import { planPosition } from './futures';
+import { EXCHANGES } from './exchanges';
 import { bucketStart, parseCsv, parseTimeframe, resample, baseIntervalFor } from './data';
 
 const mk = (closes: number[], start = 1_700_000_000, step = 3600): Candle[] =>
@@ -59,11 +62,23 @@ describe('ta primitives', () => {
   });
 });
 
+// Fake futures data aligned with the candles
+function fakeExt(c: Candle[]) {
+  return {
+    funding: c.filter((_, i) => i % 8 === 0).map((x, i) => ({ time: x.time, value: Math.sin(i / 5) * 0.0005 })),
+    oi: c.map((x, i) => ({ time: x.time, value: 1e9 + i * 1e6 * Math.sin(i / 30) })),
+    lsr: c.map((x, i) => ({ time: x.time, value: 1 + Math.sin(i / 20) * 1.5 + 1 })),
+    takerBuy: c.map((x, i) => ({ time: x.time, value: 1000 + (i % 7) * 100 })),
+    takerSell: c.map((x, i) => ({ time: x.time, value: 1000 + (i % 5) * 120 })),
+  };
+}
+
 describe('every indicator computes without errors and with aligned output', () => {
   const c = walk(400);
+  const ext = fakeExt(c);
   for (const def of INDICATORS) {
     it(def.id, () => {
-      const out = def.compute(c, defaultParams(def.params));
+      const out = def.compute(c, defaultParams(def.params), ext);
       for (const o of def.outputs) {
         expect(out[o.key], `${def.id}.${o.key}`).toHaveLength(c.length);
         expect(out[o.key].slice(-50).some(Number.isFinite), `${def.id}.${o.key} has values`).toBe(true);
@@ -74,14 +89,20 @@ describe('every indicator computes without errors and with aligned output', () =
 
 describe('strategies', () => {
   const c = walk(1500);
+  const ext = fakeExt(c);
   for (const def of STRATEGIES.filter((s) => s.id !== 'custom')) {
     it(`${def.id} produces signals and a valid backtest`, () => {
-      const sig = def.signals(c, defaultParamsFor(def));
+      const sig = def.signals(c, defaultParamsFor(def), ext);
       const r = runBacktest(c, sig, { ...DEFAULT_SETTINGS, direction: 'both' });
       expect(r.equity).toHaveLength(c.length);
       expect(Number.isFinite(r.metrics.netProfit)).toBe(true);
     });
   }
+  it('futures operands work in custom rules', () => {
+    const s = customSignals(c, { entryLong: 'FUNDING < -0.02', exitLong: 'FUNDING > 0', entryShort: 'FUNDING > 0.03 AND close < EMA(20)', exitShort: '' }, ext);
+    expect(s.entryLong.some(Boolean)).toBe(true);
+    expect(s.entryShort.some(Boolean)).toBe(true);
+  });
   it('custom rules parse and evaluate', () => {
     const s = customSignals(c, { entryLong: 'EMA(9) crosses above EMA(21) AND RSI(14) > 40', exitLong: 'EMA(9) crosses below EMA(21)', entryShort: '', exitShort: '' });
     expect(s.entryLong.some(Boolean)).toBe(true);
@@ -92,8 +113,8 @@ describe('strategies', () => {
   });
 });
 
-describe('backtest engine', () => {
-  const flat = { ...DEFAULT_SETTINGS, commissionPct: 0, slippagePct: 0 };
+describe('futures backtest engine', () => {
+  const flat = { ...DEFAULT_SETTINGS, takerFeePct: 0, slippagePct: 0, funding: 'off' as const, marginPct: 100, leverage: 1, direction: 'long' as const };
   const signalsAt = (n: number, entries: number[], exits: number[]) => ({
     entryLong: Array.from({ length: n }, (_, i) => entries.includes(i)),
     exitLong: Array.from({ length: n }, (_, i) => exits.includes(i)),
@@ -101,34 +122,74 @@ describe('backtest engine', () => {
     exitShort: new Array(n).fill(false),
   });
 
-  it('fills on the next open and computes profit exactly', () => {
+  it('1x long fills on the next open and computes profit exactly', () => {
     const c = mk([100, 100, 110, 120, 130, 125]); // opens: 100,100,100,110,120,130
     const r = runBacktest(c, signalsAt(c.length, [1], [3]), flat);
     expect(r.trades).toHaveLength(1);
-    const t = r.trades[0];
-    expect(t.entryPrice).toBe(100); // bar 2 open
-    expect(t.exitPrice).toBe(120); // bar 4 open
-    expect(t.pnl).toBeCloseTo(2000);
+    expect(r.trades[0].entryPrice).toBe(100);
+    expect(r.trades[0].exitPrice).toBe(120);
+    expect(r.trades[0].pnl).toBeCloseTo(200); // 1000 balance · +20%
     expect(r.metrics.netProfitPct).toBeCloseTo(20);
   });
 
-  it('applies commission on both sides', () => {
-    const c = mk([100, 100, 100, 100]);
-    const r = runBacktest(c, signalsAt(c.length, [0], [1]), { ...flat, commissionPct: 0.1 });
-    expect(r.trades[0].pnl).toBeLessThan(0);
-    expect(r.trades[0].fees).toBeCloseTo(20, 0); // ~0.1% of 10k twice
+  it('leverage multiplies the result on the margin', () => {
+    const c = mk([100, 100, 110, 120, 130, 125]);
+    const r = runBacktest(c, signalsAt(c.length, [1], [3]), { ...flat, marginPct: 10, leverage: 5 });
+    // margin 100, notional 500, +20% move = +100 → ROE 100%
+    expect(r.trades[0].pnl).toBeCloseTo(100);
+    expect(r.trades[0].pnlPct).toBeCloseTo(100);
   });
 
-  it('triggers the stop loss intrabar', () => {
+  it('liquidates a highly leveraged position and loses only the margin', () => {
     const c: Candle[] = [
-      { time: 0, open: 100, high: 101, low: 99, close: 100, volume: 1 },
-      { time: 60, open: 100, high: 101, low: 99, close: 100, volume: 1 },
-      { time: 120, open: 100, high: 100, low: 90, close: 95, volume: 1 },
-      { time: 180, open: 95, high: 96, low: 94, close: 95, volume: 1 },
+      { time: 0, open: 100, high: 100, low: 100, close: 100, volume: 1 },
+      { time: 60, open: 100, high: 100, low: 99, close: 100, volume: 1 },
+      { time: 120, open: 100, high: 100, low: 80, close: 85, volume: 1 },
+      { time: 180, open: 85, high: 86, low: 84, close: 85, volume: 1 },
     ];
-    const r = runBacktest(c, signalsAt(4, [0], []), { ...flat, stopLossPct: 5 });
+    const r = runBacktest(c, signalsAt(4, [0], []), { ...flat, marginPct: 10, leverage: 20 });
+    expect(r.trades[0].liquidated).toBe(true);
+    expect(r.trades[0].exitReason).toBe('Liquidatie');
+    expect(r.trades[0].pnl).toBeCloseTo(-100); // whole 10% margin of 1000
+    expect(r.metrics.liquidations).toBe(1);
+    expect(r.metrics.netProfit).toBeCloseTo(-100);
+  });
+
+  it('a stop loss above the liquidation price triggers first', () => {
+    const c: Candle[] = [
+      { time: 0, open: 100, high: 100, low: 100, close: 100, volume: 1 },
+      { time: 60, open: 100, high: 100, low: 99, close: 100, volume: 1 },
+      { time: 120, open: 100, high: 100, low: 80, close: 85, volume: 1 },
+    ];
+    const r = runBacktest(c, signalsAt(3, [0], []), { ...flat, marginPct: 10, leverage: 10, stopLossPct: 2 });
     expect(r.trades[0].exitReason).toBe('Stop loss');
-    expect(r.trades[0].exitPrice).toBeCloseTo(95);
+    expect(r.trades[0].exitPrice).toBeCloseTo(98);
+    expect(r.trades[0].pnl).toBeCloseTo(-20); // 1000 notional · -2%
+  });
+
+  it('liquidation price formula', () => {
+    expect(liquidationPrice('long', 100, 10, 0.5)).toBeCloseTo(90.5);
+    expect(liquidationPrice('short', 100, 10, 0.5)).toBeCloseTo(109.5);
+  });
+
+  it('longs pay positive funding, shorts receive it', () => {
+    const c = mk(new Array(40).fill(100), 0, 3600); // flat price, 40 hours
+    const funding = [{ time: 8 * 3600, value: 0.001 }, { time: 16 * 3600, value: 0.001 }, { time: 24 * 3600, value: 0.001 }];
+    const settings = { ...flat, funding: 'history' as const, direction: 'both' as const };
+    const long = runBacktest(c, signalsAt(40, [0], [30]), settings, funding);
+    expect(long.trades[0].funding).toBeCloseTo(3); // 1000 notional · 0.1% · 3
+    const shortSig = { entryLong: new Array(40).fill(false), exitLong: new Array(40).fill(false), entryShort: c.map((_, i) => i === 0), exitShort: c.map((_, i) => i === 30) };
+    const short = runBacktest(c, shortSig, settings, funding);
+    expect(short.trades[0].funding).toBeCloseTo(-3);
+    expect(short.trades[0].pnl).toBeGreaterThan(long.trades[0].pnl);
+  });
+
+  it('fills funding gaps with the fixed rate', () => {
+    const c = mk(new Array(48).fill(100), 0, 3600);
+    const ev = fundingEvents(c, { ...DEFAULT_SETTINGS, funding: 'history', fixedFundingPct: 0.01 }, [{ time: 40 * 3600, value: 0.002 }]);
+    expect(ev.map((e) => e.time / 3600)).toEqual([0, 8, 16, 24, 32, 40]);
+    expect(ev[0].value).toBeCloseTo(0.0001);
+    expect(fundingEvents(c, { ...DEFAULT_SETTINGS, funding: 'off' })).toHaveLength(0);
   });
 
   it('short trades profit when price falls', () => {
@@ -139,24 +200,48 @@ describe('backtest engine', () => {
     expect(r.trades[0].pnl).toBeGreaterThan(0);
   });
 
-  it('equity drawdown is never positive', () => {
+  it('equity drawdown is never positive and fees are charged', () => {
     const c = walk(800);
-    const r = runBacktest(c, STRATEGIES[0].signals(c, defaultParamsFor(STRATEGIES[0])), DEFAULT_SETTINGS);
+    const def = STRATEGIES.find((s) => s.id === 'ma_cross')!;
+    const r = runBacktest(c, def.signals(c, defaultParamsFor(def), {}), DEFAULT_SETTINGS);
     expect(r.drawdown.every((d) => d <= 0)).toBe(true);
+    expect(r.metrics.totalFees).toBeGreaterThan(0);
   });
 
-  it('optimizer runs a grid', () => {
+  it('optimizer runs a grid including leverage', () => {
     const c = walk(600);
-    const def = STRATEGIES[0];
-    const rows = optimize(c, (v) => def.signals(c, { ...defaultParamsFor(def), ...v }), [
+    const def = STRATEGIES.find((s) => s.id === 'ma_cross')!;
+    const rows = optimize(c, (v) => def.signals(c, { ...defaultParamsFor(def), ...v }, {}), [
       { key: 'fast', from: 5, to: 10, step: 5 },
-      { key: 'slow', from: 20, to: 30, step: 10 },
+      { key: '__leverage', from: 1, to: 3, step: 2 },
     ], DEFAULT_SETTINGS);
     expect(rows).toHaveLength(4);
   });
 });
 
+describe('futures helpers', () => {
+  it('position calculator sizes by risk', () => {
+    const p = planPosition({ balance: 1000, riskPct: 1, entry: 100, stop: 98, target: 106, leverage: 10, takerFeePct: 0, maintMarginPct: 0.5 })!;
+    expect(p.side).toBe('long');
+    expect(p.qty).toBeCloseTo(5); // $10 risk / $2 stop distance
+    expect(p.margin).toBeCloseTo(50);
+    expect(p.rr).toBeCloseTo(3);
+    expect(p.liqPrice).toBeCloseTo(90.5);
+    expect(p.warnings).toHaveLength(0);
+  });
+  it('warns when liquidation comes before the stop', () => {
+    const p = planPosition({ balance: 1000, riskPct: 1, entry: 100, stop: 90, target: 0, leverage: 20, takerFeePct: 0.05, maintMarginPct: 0.5 })!;
+    expect(p.warnings.join(' ')).toMatch(/liquidatie/i);
+  });
+  it('aligns step and summed series', () => {
+    const c = mk([1, 2, 3, 4], 0, 60);
+    expect(align(c, [{ time: 60, value: 5 }])).toEqual([NaN, 5, 5, 5]);
+    expect(align(c, [{ time: 60, value: 1 }, { time: 90, value: 2 }, { time: 180, value: 4 }], 'sum')).toEqual([NaN, 3, NaN, 4]);
+  });
+});
+
 describe('timeframes & data', () => {
+  const NAT = EXCHANGES.okx.intervals;
   it('parses timeframes', () => {
     expect(parseTimeframe('15')?.label).toBe('15m');
     expect(parseTimeframe('4H')?.seconds).toBe(14400);
@@ -165,10 +250,11 @@ describe('timeframes & data', () => {
     expect(parseTimeframe('abc')).toBeNull();
   });
   it('picks a base interval for custom timeframes', () => {
-    expect(baseIntervalFor(parseTimeframe('4h')!)).toEqual({ interval: '4h', resample: false });
-    expect(baseIntervalFor(parseTimeframe('45m')!)).toEqual({ interval: '15m', resample: true });
-    expect(baseIntervalFor(parseTimeframe('10m')!)).toEqual({ interval: '5m', resample: true });
-    expect(baseIntervalFor(parseTimeframe('3M')!)).toEqual({ interval: '1M', resample: true });
+    expect(baseIntervalFor(parseTimeframe('4h')!, NAT)).toEqual({ interval: '4h', resample: false });
+    expect(baseIntervalFor(parseTimeframe('45m')!, NAT)).toEqual({ interval: '15m', resample: true });
+    expect(baseIntervalFor(parseTimeframe('10m')!, NAT)).toEqual({ interval: '5m', resample: true });
+    expect(baseIntervalFor(parseTimeframe('8h')!, NAT)).toEqual({ interval: '4h', resample: true });
+    expect(baseIntervalFor(parseTimeframe('3M')!, NAT)).toEqual({ interval: '1M', resample: true });
   });
   it('resamples 1h into 3h', () => {
     const c = mk([1, 2, 3, 4, 5, 6], 0, 3600);

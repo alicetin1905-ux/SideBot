@@ -21,7 +21,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 import type { Candle, Params } from './types';
-import { INDICATOR_MAP, resolveOffset, type IndicatorDef } from './indicators';
+import { INDICATOR_MAP, resolveOffset, type ExtData, type IndicatorDef } from './indicators';
 import { heikinAshi } from './ta';
 import type { Trade } from './backtest';
 
@@ -34,12 +34,26 @@ export interface Theme {
   border: string;
   up: string;
   down: string;
+  accent: string;
 }
 
-export const THEMES: Record<'dark' | 'light', Theme> = {
-  dark: { bg: '#131722', text: '#d1d4dc', grid: '#1e222d', border: '#2a2e39', up: '#089981', down: '#f23645' },
-  light: { bg: '#ffffff', text: '#131722', grid: '#f0f3fa', border: '#e0e3eb', up: '#089981', down: '#f23645' },
+/** Neon "terminal" theme. The chart is transparent so the page's grid backdrop shows through. */
+export const NEON: Theme = {
+  bg: 'rgba(0,0,0,0)',
+  text: '#8fa3c0',
+  grid: 'rgba(0,229,255,0.055)',
+  border: 'rgba(0,229,255,0.18)',
+  up: '#00ffa3',
+  down: '#ff3b6b',
+  accent: '#00e5ff',
 };
+
+export interface PositionLines {
+  entry: number;
+  stop: number;
+  target: number;
+  liq: number;
+}
 
 export interface ActiveIndicator {
   uid: number;
@@ -54,7 +68,7 @@ export interface ActiveIndicator {
   fromStrategy: boolean;
 }
 
-export type DrawTool = 'none' | 'hline' | 'trend' | 'fib' | 'alert';
+export type DrawTool = 'none' | 'hline' | 'trend' | 'fib' | 'alert' | 'pick';
 
 export interface Drawing {
   kind: 'hline' | 'trend' | 'fib';
@@ -62,7 +76,7 @@ export interface Drawing {
 }
 
 const FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
-const FIB_COLORS = ['#787b86', '#f23645', '#ff9800', '#4caf50', '#089981', '#00bcd4', '#787b86'];
+const FIB_COLORS = ['#8fa3c0', '#ff3b6b', '#ffb800', '#00ffa3', '#1de9b6', '#00e5ff', '#8fa3c0'];
 
 const ts = (t: number) => t as UTCTimestamp;
 
@@ -88,7 +102,9 @@ export class ChartView {
   private markers: ISeriesMarkersPluginApi<Time> | null = null;
   private candles: Candle[] = [];
   private chartType: ChartType = 'candles';
-  private theme: Theme = THEMES.dark;
+  private theme: Theme = NEON;
+  private ext: ExtData = {};
+  private positionLines: PositionLines | null = null;
   private nextUid = 1;
   private barSeconds = 60;
   indicators: ActiveIndicator[] = [];
@@ -102,15 +118,25 @@ export class ChartView {
   onDrawingsChange?: (d: Drawing[]) => void;
   onToolDone?: () => void;
   onAlertPick?: (price: number) => void;
+  /** Price picked with the 'pick' tool (used by the position calculator) */
+  onPick?: (price: number) => void;
   onCrosshair?: (text: string) => void;
 
   constructor(container: HTMLElement) {
     this.chart = createChart(container, {
       autoSize: true,
-      crosshair: { mode: CrosshairMode.Normal },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: { color: 'rgba(0,229,255,0.45)', labelBackgroundColor: '#0a3a4a' },
+        horzLine: { color: 'rgba(0,229,255,0.45)', labelBackgroundColor: '#0a3a4a' },
+      },
       timeScale: { timeVisible: true, secondsVisible: false, rightOffset: 8, tickMarkFormatter: localTickFormatter },
       localization: { timeFormatter: (t: Time) => new Date((t as number) * 1000).toLocaleString() },
-      layout: { panes: { separatorColor: '#2a2e39', enableResize: true } },
+      layout: {
+        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+        fontSize: 11,
+        panes: { separatorColor: 'rgba(0,229,255,0.18)', separatorHoverColor: 'rgba(0,229,255,0.35)', enableResize: true },
+      },
     });
     // Keep the price pane alive while the main series is swapped (chart type / theme change).
     this.chart.panes()[0].setPreserveEmptyPane(true);
@@ -155,17 +181,21 @@ export class ChartView {
         this.main = this.chart.addSeries(BarSeries, { upColor: t.up, downColor: t.down, ...fmt }, 0);
         break;
       case 'line':
-        this.main = this.chart.addSeries(LineSeries, { color: '#2962ff', lineWidth: 2, ...fmt }, 0);
+        this.main = this.chart.addSeries(LineSeries, { color: t.accent, lineWidth: 2, ...fmt }, 0);
         break;
       case 'area':
         this.main = this.chart.addSeries(
           AreaSeries,
-          { lineColor: '#2962ff', topColor: 'rgba(41,98,255,0.4)', bottomColor: 'rgba(41,98,255,0)', ...fmt },
+          { lineColor: t.accent, topColor: 'rgba(0,229,255,0.35)', bottomColor: 'rgba(0,229,255,0)', ...fmt },
           0,
         );
         break;
       case 'baseline':
-        this.main = this.chart.addSeries(BaselineSeries, { ...fmt }, 0);
+        this.main = this.chart.addSeries(
+          BaselineSeries,
+          { topLineColor: t.up, bottomLineColor: t.down, topFillColor1: 'rgba(0,255,163,0.25)', topFillColor2: 'rgba(0,255,163,0)', bottomFillColor1: 'rgba(255,59,107,0)', bottomFillColor2: 'rgba(255,59,107,0.25)', ...fmt },
+          0,
+        );
         break;
       case 'hollow':
         this.main = this.chart.addSeries(
@@ -177,7 +207,7 @@ export class ChartView {
       default:
         this.main = this.chart.addSeries(
           CandlestickSeries,
-          { upColor: t.up, downColor: t.down, borderVisible: false, wickUpColor: t.up, wickDownColor: t.down, ...fmt },
+          { upColor: t.up, downColor: t.down, borderVisible: false, wickUpColor: 'rgba(0,255,163,0.7)', wickDownColor: 'rgba(255,59,107,0.7)', ...fmt },
           0,
         );
     }
@@ -281,7 +311,7 @@ export class ChartView {
       ind.levels.push(
         ind.series[ind.series.length - 1].createPriceLine({
           price: lvl,
-          color: '#787b86',
+          color: 'rgba(143,163,192,0.45)',
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
           axisLabelVisible: false,
@@ -296,7 +326,7 @@ export class ChartView {
     if (!n) return;
     let values: Record<string, number[]>;
     try {
-      values = ind.def.compute(c, ind.params);
+      values = ind.def.compute(c, ind.params, this.ext);
     } catch (e) {
       console.error(e);
       return;
@@ -317,11 +347,11 @@ export class ChartView {
           continue;
         }
         if (o.colorBy === 'candle') {
-          data.push({ time, value: v, color: c[i].close >= c[i].open ? 'rgba(8,153,129,0.5)' : 'rgba(242,54,69,0.5)' });
+          data.push({ time, value: v, color: c[i].close >= c[i].open ? 'rgba(0,255,163,0.45)' : 'rgba(255,59,107,0.45)' });
         } else if (o.colorBy === 'sign') {
           const prev = arr[i - 1];
           const rising = Number.isFinite(prev) ? v >= prev : true;
-          data.push({ time, value: v, color: v >= 0 ? (rising ? '#26a69a' : '#b2dfdb') : rising ? '#ffcdd2' : '#ff5252' });
+          data.push({ time, value: v, color: v >= 0 ? (rising ? '#00ffa3' : 'rgba(0,255,163,0.45)') : rising ? 'rgba(255,59,107,0.45)' : '#ff3b6b' });
         } else {
           data.push({ time, value: v });
         }
@@ -329,6 +359,12 @@ export class ChartView {
       ind.series[k].setData(data);
       ind.series[k].applyOptions({ visible: !ind.hidden });
     });
+  }
+
+  /** Futures data (funding, OI, …) used by indicators that need it. */
+  setExt(ext: ExtData) {
+    this.ext = ext;
+    this.refreshIndicators();
   }
 
   refreshIndicators() {
@@ -368,16 +404,16 @@ export class ChartView {
       m.push({
         time: ts(t.entryTime),
         position: long ? 'belowBar' : 'aboveBar',
-        color: long ? '#2962ff' : '#f23645',
+        color: long ? '#00e5ff' : '#ff2bd6',
         shape: long ? 'arrowUp' : 'arrowDown',
         text: long ? 'Long' : 'Short',
       });
       m.push({
         time: ts(t.exitTime),
         position: long ? 'aboveBar' : 'belowBar',
-        color: t.pnl >= 0 ? '#089981' : '#f23645',
-        shape: 'circle',
-        text: `${t.pnl >= 0 ? '+' : ''}${t.pnlPct.toFixed(1)}%`,
+        color: t.liquidated ? '#ffb800' : t.pnl >= 0 ? '#00ffa3' : '#ff3b6b',
+        shape: t.liquidated ? 'square' : 'circle',
+        text: t.liquidated ? 'LIQ' : `${t.pnl >= 0 ? '+' : ''}${t.pnlPct.toFixed(1)}%`,
       });
     }
     m.sort((a, b) => (a.time as number) - (b.time as number));
@@ -397,6 +433,11 @@ export class ChartView {
   // ---------------------------------------------------------------- drawings
   setDrawings(d: Drawing[]) {
     this.drawings = d.map((x) => ({ ...x, points: [...x.points] }));
+    this.redrawDrawings();
+  }
+
+  setPositionLines(p: PositionLines | null) {
+    this.positionLines = p;
     this.redrawDrawings();
   }
 
@@ -426,19 +467,28 @@ export class ChartView {
     if (!this.main) return;
     const alerts = { lines: [] as IPriceLine[], series: [] as ISeriesApi<SeriesType>[] };
     for (const price of this.alertPrices) {
-      alerts.lines.push(this.main.createPriceLine({ price, color: '#ff9800', lineWidth: 1, lineStyle: LineStyle.LargeDashed, axisLabelVisible: true, title: '🔔' }));
+      alerts.lines.push(this.main.createPriceLine({ price, color: '#ffb800', lineWidth: 1, lineStyle: LineStyle.LargeDashed, axisLabelVisible: true, title: 'ALERT' }));
+    }
+    if (this.positionLines) {
+      const p = this.positionLines;
+      const line = (price: number, color: string, title: string, style = LineStyle.Solid) =>
+        price > 0 && alerts.lines.push(this.main.createPriceLine({ price, color, lineWidth: 2, lineStyle: style, axisLabelVisible: true, title }));
+      line(p.entry, '#00e5ff', 'ENTRY');
+      line(p.stop, '#ff3b6b', 'SL');
+      line(p.target, '#00ffa3', 'TP');
+      line(p.liq, '#ffb800', 'LIQ', LineStyle.Dashed);
     }
     this.drawingObjects.push(alerts);
     for (const d of this.drawings) {
       const obj = { lines: [] as IPriceLine[], series: [] as ISeriesApi<SeriesType>[] };
       if (d.kind === 'hline') {
-        obj.lines.push(this.main.createPriceLine({ price: d.points[0].price, color: '#2962ff', lineWidth: 1, lineStyle: LineStyle.Solid, axisLabelVisible: true }));
+        obj.lines.push(this.main.createPriceLine({ price: d.points[0].price, color: '#00e5ff', lineWidth: 1, lineStyle: LineStyle.Solid, axisLabelVisible: true }));
       } else if (d.kind === 'trend') {
         const [a, b] = [...d.points].sort((x, y) => x.time - y.time);
         if (a.time !== b.time) {
           const s = this.chart.addSeries(
             LineSeries,
-            { color: '#2962ff', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, pointMarkersVisible: true },
+            { color: '#ff2bd6', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, pointMarkersVisible: true },
             0,
           );
           s.setData([
@@ -478,8 +528,9 @@ export class ChartView {
     const idx = Math.round(logical);
     const time = idx < n ? this.candles[Math.max(0, idx)].time : this.candles[n - 1].time + (idx - n + 1) * this.barSeconds;
     const pt = { time, price };
-    if (this.tool === 'alert') {
-      this.onAlertPick?.(price);
+    if (this.tool === 'alert' || this.tool === 'pick') {
+      if (this.tool === 'alert') this.onAlertPick?.(price);
+      else this.onPick?.(price);
       this.finishTool();
       return;
     }
@@ -559,12 +610,22 @@ export class EquityChart {
   constructor(container: HTMLElement) {
     this.chart = createChart(container, {
       autoSize: true,
+      layout: { fontFamily: "'JetBrains Mono', ui-monospace, monospace", fontSize: 10 },
       timeScale: { timeVisible: true },
       rightPriceScale: { scaleMargins: { top: 0.1, bottom: 0.25 } },
       localization: { timeFormatter: (t: Time) => new Date((t as number) * 1000).toLocaleString() },
     });
-    this.equity = this.chart.addSeries(BaselineSeries, { lineWidth: 2, priceLineVisible: false });
-    this.dd = this.chart.addSeries(HistogramSeries, { color: 'rgba(242,54,69,0.35)', priceScaleId: 'dd', priceLineVisible: false, lastValueVisible: false });
+    this.equity = this.chart.addSeries(BaselineSeries, {
+      lineWidth: 2,
+      priceLineVisible: false,
+      topLineColor: '#00ffa3',
+      bottomLineColor: '#ff3b6b',
+      topFillColor1: 'rgba(0,255,163,0.28)',
+      topFillColor2: 'rgba(0,255,163,0.02)',
+      bottomFillColor1: 'rgba(255,59,107,0.02)',
+      bottomFillColor2: 'rgba(255,59,107,0.28)',
+    });
+    this.dd = this.chart.addSeries(HistogramSeries, { color: 'rgba(255,59,107,0.35)', priceScaleId: 'dd', priceLineVisible: false, lastValueVisible: false });
     this.chart.priceScale('dd').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
   }
 
@@ -572,6 +633,8 @@ export class EquityChart {
     this.chart.applyOptions({
       layout: { background: { type: ColorType.Solid, color: t.bg }, textColor: t.text },
       grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
+      rightPriceScale: { borderColor: t.border },
+      timeScale: { borderColor: t.border },
     });
   }
 

@@ -3,90 +3,164 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SideChart</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232962ff'/><path d='M6 22l6-7 5 4 9-11' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
+    <meta name="theme-color" content="#03050b" />
+    <title>SideChart · Futures Terminal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%2303050b'/><path d='M5 22l7-8 5 4 10-11' stroke='%2300e5ff' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
   </head>
   <body>
+    <div class="backdrop" aria-hidden="true"></div>
     <div id="app">
       <header class="topbar">
         <div class="brand">
-          <svg viewBox="0 0 32 32" width="22" height="22" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#2962ff" /><path d="M6 22l6-7 5 4 9-11" stroke="white" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
-          <span>SideChart</span>
+          <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><path d="M5 22l7-8 5 4 10-11" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          <div class="brand-text"><span class="brand-name">SIDECHART</span><span class="brand-sub">FUTURES TERMINAL</span></div>
         </div>
 
-        <div class="group">
-          <input id="symbol" class="symbol" list="symbol-list" spellcheck="false" autocomplete="off" title="Symbool (bv. BTCUSDT)" />
+        <div class="seg" id="exchange" role="radiogroup" aria-label="Exchange">
+          <button data-ex="okx">OKX</button>
+          <button data-ex="bitget">BITGET</button>
+        </div>
+
+        <div class="group symbol-wrap">
+          <input id="symbol" class="symbol" list="symbol-list" spellcheck="false" autocomplete="off" title="Contract (bv. BTCUSDT)" />
+          <span class="perp-badge">PERP</span>
           <datalist id="symbol-list"></datalist>
         </div>
 
         <div class="group tf" id="tf-buttons"></div>
         <div class="group">
           <select id="tf-more" title="Alle timeframes"></select>
-          <input id="tf-custom" class="tf-custom" placeholder="eigen: 10m, 3h, 2D" title="Eigen timeframe: getal + s/m/h/D/W/M" />
+          <input id="tf-custom" class="tf-custom" placeholder="eigen: 10m · 3h · 2D" title="Eigen timeframe: getal + s/m/h/D/W/M" />
         </div>
 
         <div class="group">
           <select id="chart-type" title="Grafiektype">
             <option value="candles">Candles</option>
-            <option value="hollow">Hollow candles</option>
+            <option value="hollow">Hollow</option>
             <option value="heikin">Heikin Ashi</option>
-            <option value="bars">Bars (OHLC)</option>
+            <option value="bars">OHLC bars</option>
             <option value="line">Lijn</option>
             <option value="area">Area</option>
             <option value="baseline">Baseline</option>
           </select>
-        </div>
-
-        <div class="group">
           <button id="btn-indicators" class="btn primary" title="Indicatoren toevoegen"><b>ƒx</b> Indicatoren</button>
         </div>
 
         <div class="group tools" role="toolbar" aria-label="Tekentools">
           <button class="btn icon" data-tool="hline" title="Horizontale lijn">―</button>
           <button class="btn icon" data-tool="trend" title="Trendlijn (2 klikken)">╱</button>
-          <button class="btn icon" data-tool="fib" title="Fibonacci retracement (2 klikken)">Fib</button>
-          <button class="btn icon" data-tool="alert" title="Prijsalarm (klik op een prijs)">🔔</button>
-          <button class="btn icon" id="btn-clear-drawings" title="Tekeningen wissen">🗑</button>
+          <button class="btn icon" data-tool="fib" title="Fibonacci retracement (2 klikken)">FIB</button>
+          <button class="btn icon" data-tool="alert" title="Prijsalarm (klik op een prijs)">⏰</button>
+          <button class="btn icon" id="btn-clear-drawings" title="Tekeningen wissen">⌫</button>
         </div>
 
         <div class="group right">
           <select id="bars" title="Hoeveel historie laden (meer = langere backtest)">
-            <option value="1000">1k bars</option>
-            <option value="3000">3k bars</option>
-            <option value="5000" selected>5k bars</option>
-            <option value="10000">10k bars</option>
-            <option value="20000">20k bars</option>
-            <option value="50000">50k bars</option>
+            <option value="1000">1K bars</option>
+            <option value="3000">3K bars</option>
+            <option value="5000">5K bars</option>
+            <option value="10000">10K bars</option>
+            <option value="20000">20K bars</option>
           </select>
-          <label class="btn" title="Eigen data importeren (CSV met time, open, high, low, close, volume)">
-            CSV <input type="file" id="csv" accept=".csv,text/csv" hidden />
-          </label>
-          <button id="btn-theme" class="btn icon" title="Licht/donker">◐</button>
-          <button id="btn-sidebar" class="btn icon" title="Zijbalk">☰</button>
+          <label class="btn icon" title="Eigen data importeren (CSV)">CSV<input type="file" id="csv" accept=".csv,text/csv" hidden /></label>
+          <button id="btn-sidebar" class="btn icon" title="Zijpaneel">☰</button>
         </div>
       </header>
 
+      <section class="hud" id="hud" aria-label="Contract statistieken">
+        <div class="hud-cell hud-price">
+          <span class="hud-label" id="hud-symbol">—</span>
+          <span class="hud-value big" id="hud-last">—</span>
+        </div>
+        <div class="hud-cell"><span class="hud-label">Mark</span><span class="hud-value" id="hud-mark">—</span></div>
+        <div class="hud-cell"><span class="hud-label">Index</span><span class="hud-value" id="hud-index">—</span></div>
+        <div class="hud-cell"><span class="hud-label">Funding / Countdown</span><span class="hud-value"><span id="hud-funding">—</span> <span class="hud-dim" id="hud-countdown"></span></span></div>
+        <div class="hud-cell"><span class="hud-label">Open interest</span><span class="hud-value" id="hud-oi">—</span></div>
+        <div class="hud-cell"><span class="hud-label">24u verandering</span><span class="hud-value" id="hud-change">—</span></div>
+        <div class="hud-cell"><span class="hud-label">24u high / low</span><span class="hud-value" id="hud-hl">—</span></div>
+        <div class="hud-cell"><span class="hud-label">24u volume</span><span class="hud-value" id="hud-vol">—</span></div>
+        <div class="hud-cell hud-live"><span class="live-dot" id="live-dot"></span><span class="hud-label" id="live-label">OFFLINE</span></div>
+      </section>
+
       <main class="main">
-        <div class="chart-area">
+        <div class="chart-area panel">
           <div id="legend" class="legend"></div>
           <div id="chart" class="chart"></div>
           <div id="status" class="status"></div>
           <div id="tool-hint" class="tool-hint" hidden></div>
         </div>
 
-        <aside class="sidebar" id="sidebar">
-          <section>
-            <div class="side-head">
-              <h3>Watchlist</h3>
-              <button id="btn-watch-add" class="btn small" title="Huidig symbool toevoegen">+</button>
+        <aside class="sidebar panel" id="sidebar">
+          <nav class="side-tabs" role="tablist">
+            <button class="side-tab" data-side="markets">Markten</button>
+            <button class="side-tab" data-side="liqs">Liquidaties</button>
+            <button class="side-tab" data-side="calc">Calculator</button>
+            <button class="side-tab" data-side="chart">Chart</button>
+          </nav>
+
+          <section class="side-panel" data-sidepanel="markets">
+            <div class="row">
+              <input id="market-search" class="grow" placeholder="Zoek contract…" autocomplete="off" />
+              <select id="market-sort" title="Sorteren">
+                <option value="volume">Volume</option>
+                <option value="change">24u %</option>
+                <option value="losers">Dalers</option>
+                <option value="funding">Funding</option>
+                <option value="name">Naam</option>
+              </select>
             </div>
-            <ul id="watchlist" class="watchlist"></ul>
+            <div class="list-head market-row"><span></span><span>Contract</span><span>Prijs</span><span>24u</span><span>Vol</span></div>
+            <ul id="markets" class="market-list"></ul>
           </section>
-          <section>
-            <h3>Op de grafiek</h3>
+
+          <section class="side-panel" data-sidepanel="liqs" hidden>
+            <div id="liq-unavailable" class="notice" hidden>
+              Bitget heeft geen publieke liquidatie-feed.
+              <button class="btn small" id="btn-liq-okx">Toon OKX liquidaties</button>
+            </div>
+            <div class="liq-totals">
+              <div><span class="hud-label">Longs geliquideerd · 1u</span><b class="down" id="liq-long-total">$0</b></div>
+              <div><span class="hud-label">Shorts geliquideerd · 1u</span><b class="up" id="liq-short-total">$0</b></div>
+            </div>
+            <div class="liq-bar"><span id="liq-bar-long"></span></div>
+            <div class="row">
+              <select id="liq-min" title="Minimale grootte">
+                <option value="0">Alles</option>
+                <option value="1000">≥ $1K</option>
+                <option value="10000">≥ $10K</option>
+                <option value="50000">≥ $50K</option>
+                <option value="100000">≥ $100K</option>
+              </select>
+              <label class="check"><input type="checkbox" id="liq-only" /> alleen dit contract</label>
+            </div>
+            <ul id="liqs" class="liq-list"></ul>
+          </section>
+
+          <section class="side-panel" data-sidepanel="calc" hidden>
+            <p class="muted">Bereken je positiegrootte op basis van je risico, en zie meteen je liquidatieprijs.</p>
+            <div class="param-grid" id="calc-form">
+              <label>Saldo (USDT)<input type="number" id="c-balance" min="0" step="10" /></label>
+              <label>Risico per trade %<input type="number" id="c-risk" min="0.1" step="0.1" /></label>
+              <label>Leverage<input type="number" id="c-lev" min="1" max="200" step="1" /></label>
+              <label>Taker fee %<input type="number" id="c-fee" min="0" step="0.01" /></label>
+              <label>Entry <span class="pick-row"><input type="number" id="c-entry" step="any" /><button class="btn icon small" data-pick="c-entry" title="Klik op de grafiek">⌖</button></span></label>
+              <label>Stop loss <span class="pick-row"><input type="number" id="c-stop" step="any" /><button class="btn icon small" data-pick="c-stop" title="Klik op de grafiek">⌖</button></span></label>
+              <label>Take profit <span class="pick-row"><input type="number" id="c-target" step="any" /><button class="btn icon small" data-pick="c-target" title="Klik op de grafiek">⌖</button></span></label>
+              <label>Maint. marge %<input type="number" id="c-mmr" min="0" step="0.1" /></label>
+            </div>
+            <div class="row">
+              <button class="btn small" id="c-now">Entry = huidige prijs</button>
+              <label class="check"><input type="checkbox" id="c-show" checked /> toon op grafiek</label>
+            </div>
+            <div id="calc-out" class="calc-out"></div>
+          </section>
+
+          <section class="side-panel" data-sidepanel="chart" hidden>
+            <h3>Indicatoren</h3>
             <ul id="active-indicators" class="active-list"></ul>
-          </section>
-          <section>
             <div class="side-head">
               <h3>Alarmen</h3>
               <button id="btn-notify" class="btn small" title="Browsermeldingen toestaan">Meldingen aan</button>
@@ -96,7 +170,7 @@
         </aside>
       </main>
 
-      <section class="tester" id="tester">
+      <section class="tester panel" id="tester">
         <div class="tester-head">
           <div class="tabs" role="tablist">
             <button class="tab active" data-tab="overview">Strategy Tester</button>
@@ -109,7 +183,7 @@
 
         <div class="tester-body">
           <div class="strategy-form">
-            <label>Strategie
+            <label class="field">Strategie
               <select id="strategy"></select>
             </label>
             <p id="strategy-desc" class="muted"></p>
@@ -117,34 +191,41 @@
             <div id="custom-rules" class="custom-rules" hidden>
               <label>Long entry <input id="rule-el" placeholder="EMA(9) crosses above EMA(21)" /></label>
               <label>Long exit <input id="rule-xl" placeholder="EMA(9) crosses below EMA(21)" /></label>
-              <label>Short entry <input id="rule-es" placeholder="(leeg = geen shorts)" /></label>
-              <label>Short exit <input id="rule-xs" placeholder="" /></label>
+              <label>Short entry <input id="rule-es" placeholder="FUNDING > 0.05 AND close < EMA(50)" /></label>
+              <label>Short exit <input id="rule-xs" placeholder="FUNDING < 0.01" /></label>
               <details><summary>Hoe schrijf ik regels?</summary><pre id="rule-help"></pre></details>
             </div>
 
             <details class="settings" open>
-              <summary>Instellingen</summary>
+              <summary>Futures instellingen</summary>
               <div class="param-grid">
-                <label>Startkapitaal <input type="number" id="s-capital" min="1" step="100" /></label>
-                <label>Positie % van kapitaal <input type="number" id="s-size" min="1" max="100" step="1" /></label>
-                <label>Commissie % <input type="number" id="s-comm" min="0" step="0.01" /></label>
-                <label>Slippage % <input type="number" id="s-slip" min="0" step="0.01" /></label>
+                <label>Startsaldo (USDT)<input type="number" id="s-capital" min="1" step="100" /></label>
+                <label>Marge % per trade<input type="number" id="s-margin" min="1" max="100" step="1" /></label>
+                <label>Leverage ×<input type="number" id="s-lev" min="1" max="200" step="1" /></label>
+                <label>Taker fee %<input type="number" id="s-fee" min="0" step="0.01" /></label>
+                <label>Slippage %<input type="number" id="s-slip" min="0" step="0.01" /></label>
+                <label>Maint. marge %<input type="number" id="s-mmr" min="0" step="0.1" /></label>
                 <label>Richting
-                  <select id="s-dir"><option value="long">Alleen long</option><option value="short">Alleen short</option><option value="both">Long &amp; short</option></select>
+                  <select id="s-dir"><option value="both">Long &amp; short</option><option value="long">Alleen long</option><option value="short">Alleen short</option></select>
                 </label>
                 <label>Uitvoering
                   <select id="s-fill"><option value="nextOpen">Volgende open</option><option value="close">Op slot</option></select>
                 </label>
-                <label>Stop loss % <input type="number" id="s-sl" min="0" step="0.1" /></label>
-                <label>Take profit % <input type="number" id="s-tp" min="0" step="0.1" /></label>
-                <label>Trailing stop % <input type="number" id="s-trail" min="0" step="0.1" /></label>
+                <label>Stop loss % (koers)<input type="number" id="s-sl" min="0" step="0.1" /></label>
+                <label>Take profit % (koers)<input type="number" id="s-tp" min="0" step="0.1" /></label>
+                <label>Trailing stop %<input type="number" id="s-trail" min="0" step="0.1" /></label>
+                <label>Funding
+                  <select id="s-funding"><option value="history">Echte historie</option><option value="fixed">Vast tarief</option><option value="off">Uit</option></select>
+                </label>
+                <label>Vast funding % / periode<input type="number" id="s-ffix" step="0.001" /></label>
+                <label>Funding-interval (u)<input type="number" id="s-fint" min="1" step="1" /></label>
               </div>
             </details>
 
             <div class="row">
               <button id="btn-run" class="btn primary">▶ Backtest</button>
-              <label class="check"><input type="checkbox" id="auto-run" checked /> automatisch</label>
-              <label class="check"><input type="checkbox" id="show-ind" checked /> toon indicatoren</label>
+              <label class="check"><input type="checkbox" id="auto-run" checked /> auto</label>
+              <label class="check"><input type="checkbox" id="show-ind" checked /> indicatoren</label>
               <button id="btn-strategy-off" class="btn">Uit</button>
             </div>
             <p id="strategy-error" class="error" hidden></p>
@@ -161,10 +242,10 @@
           </div>
 
           <div class="tab-panel" data-panel="optimizer" hidden>
-            <p class="muted">Test automatisch alle combinaties van 1 of 2 parameters en sorteer op resultaat. Klik op een rij om die instellingen te gebruiken.</p>
+            <p class="muted">Test alle combinaties van 1 of 2 parameters (ook leverage) en sorteer op resultaat. Klik op een rij om die instellingen te gebruiken.</p>
             <div class="opt-grid" id="opt-ranges"></div>
             <div class="row">
-              <label>Sorteer op
+              <label class="check">Sorteer op
                 <select id="opt-sort">
                   <option value="netProfitPct">Netto winst %</option>
                   <option value="profitFactor">Profit factor</option>
@@ -175,7 +256,7 @@
               </label>
               <button id="btn-optimize" class="btn primary">Optimaliseer</button>
             </div>
-            <p class="warning">Let op: de beste instellingen uit het verleden zijn geen garantie voor de toekomst (overfitting). Test ze daarna op een andere periode of markt.</p>
+            <p class="warning">De beste instellingen uit het verleden zijn geen garantie voor de toekomst (overfitting). Test ze daarna op een andere periode of contract.</p>
             <div class="table-wrap"><table id="opt-results" class="table"></table></div>
           </div>
         </div>

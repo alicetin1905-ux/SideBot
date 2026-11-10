@@ -1,5 +1,38 @@
 import type { Candle, ParamDef, Params, Series } from './types';
 import * as ta from './ta';
+import type { ExtKind, Point } from './exchanges/types';
+
+/** Futures data (funding, open interest, …) fetched separately from the candles. */
+export type ExtData = Partial<Record<ExtKind, Point[]>>;
+
+/**
+ * Align a time series to the candles.
+ * 'step' = carry the last known value forward (levels such as open interest, funding).
+ * 'sum'  = add every data point to the candle it falls in (flows such as taker volume);
+ *          candles without data stay empty.
+ */
+export function align(c: Candle[], pts: Point[] | undefined, mode: 'step' | 'sum' = 'step'): Series {
+  const out = new Array<number>(c.length).fill(NaN);
+  if (!pts?.length || !c.length) return out;
+  if (mode === 'sum') {
+    let i = 0;
+    for (const p of pts) {
+      if (p.time < c[0].time) continue;
+      while (i + 1 < c.length && c[i + 1].time <= p.time) i++;
+      // ignore points beyond the last candle's period
+      if (i === c.length - 1 && c.length > 1 && p.time - c[i].time >= c[i].time - c[i - 1].time) continue;
+      out[i] = (Number.isNaN(out[i]) ? 0 : out[i]) + p.value;
+    }
+    return out;
+  }
+  let j = 0;
+  for (let i = 0; i < c.length; i++) {
+    while (j < pts.length && pts[j].time <= c[i].time) j++;
+    const p = pts[j - 1];
+    if (p) out[i] = p.value;
+  }
+  return out;
+}
 
 export interface OutputDef {
   key: string;
@@ -17,13 +50,15 @@ export interface OutputDef {
 export interface IndicatorDef {
   id: string;
   name: string;
-  category: 'Moving averages' | 'Bands & channels' | 'Trend' | 'Oscillators' | 'Volume' | 'Volatility';
+  category: 'Futures' | 'Moving averages' | 'Bands & channels' | 'Trend' | 'Oscillators' | 'Volume' | 'Volatility';
+  /** Futures data this indicator needs (fetched on demand from the exchange) */
+  external?: ExtKind[];
   /** true = drawn on the price chart, false = own pane below */
   overlay: boolean;
   params: ParamDef[];
   outputs: OutputDef[];
   levels?: number[];
-  compute(c: Candle[], p: Params): Record<string, Series>;
+  compute(c: Candle[], p: Params, ext: ExtData): Record<string, Series>;
 }
 
 const num = (key: string, label: string, def: number, step = 1, min = 1): ParamDef => ({
@@ -50,18 +85,115 @@ const ma = (id: string, name: string, color: string, fn: (s: Series, n: number, 
 });
 
 export const INDICATORS: IndicatorDef[] = [
+  // ---- Futures ----
+  {
+    id: 'funding',
+    name: 'Funding Rate',
+    category: 'Futures',
+    overlay: false,
+    external: ['funding'],
+    params: [{ key: 'mode', label: 'Weergave', type: 'select', default: 'Per periode %', options: ['Per periode %', 'Jaarlijks %'] }],
+    outputs: [{ key: 'value', label: 'Funding', type: 'histogram', color: '#00e5ff', colorBy: 'sign' }],
+    levels: [0],
+    compute: (c, p, ext) => {
+      const pts = ext.funding ?? [];
+      // Funding settles every few hours; annualise using the observed interval.
+      const gap = pts.length > 1 ? (pts[pts.length - 1].time - pts[0].time) / (pts.length - 1) : 28800;
+      const k = p.mode === 'Jaarlijks %' ? 100 * ((365 * 86400) / gap) : 100;
+      return { value: align(c, pts).map((v) => v * k) };
+    },
+  },
+  {
+    id: 'oi',
+    name: 'Open Interest (USD, live opgenomen)',
+    category: 'Futures',
+    overlay: false,
+    external: ['oi'],
+    params: [num('ma', 'MA lengte', 20)],
+    outputs: [
+      { key: 'value', label: 'OI', type: 'line', color: '#ffb800', lineWidth: 2 },
+      { key: 'ma', label: 'MA', type: 'line', color: '#b388ff', dashed: true },
+    ],
+    compute: (c, p, ext) => {
+      const v = align(c, ext.oi);
+      return { value: v, ma: ta.sma(v, N(p, 'ma')) };
+    },
+  },
+  {
+    id: 'oidelta',
+    name: 'Open Interest Delta (live opgenomen)',
+    category: 'Futures',
+    overlay: false,
+    external: ['oi'],
+    params: [],
+    outputs: [{ key: 'value', label: 'ΔOI', type: 'histogram', color: '#ffb800', colorBy: 'sign' }],
+    levels: [0],
+    compute: (c, _p, ext) => {
+      const v = align(c, ext.oi);
+      return { value: v.map((x, i) => (i ? x - v[i - 1] : NaN)) };
+    },
+  },
+  {
+    id: 'lsr',
+    name: 'Long/Short Ratio (accounts, via Bitget)',
+    category: 'Futures',
+    overlay: false,
+    external: ['lsr'],
+    params: [],
+    outputs: [{ key: 'value', label: 'L/S', type: 'line', color: '#ff2bd6', lineWidth: 2 }],
+    levels: [1],
+    compute: (c, _p, ext) => ({ value: align(c, ext.lsr) }),
+  },
+  {
+    id: 'takerdelta',
+    name: 'Taker Buy/Sell Delta (via Bitget)',
+    category: 'Futures',
+    overlay: false,
+    external: ['takerBuy', 'takerSell'],
+    params: [],
+    outputs: [{ key: 'value', label: 'Delta', type: 'histogram', color: '#00ffa3', colorBy: 'sign' }],
+    levels: [0],
+    compute: (c, _p, ext) => {
+      const b = align(c, ext.takerBuy, 'sum');
+      const s = align(c, ext.takerSell, 'sum');
+      return { value: b.map((x, i) => x - s[i]) };
+    },
+  },
+  {
+    id: 'cvd',
+    name: 'Cumulative Volume Delta (via Bitget)',
+    category: 'Futures',
+    overlay: false,
+    external: ['takerBuy', 'takerSell'],
+    params: [],
+    outputs: [{ key: 'value', label: 'CVD', type: 'line', color: '#00ffa3', lineWidth: 2 }],
+    compute: (c, _p, ext) => {
+      const b = align(c, ext.takerBuy, 'sum');
+      const s = align(c, ext.takerSell, 'sum');
+      let acc = 0;
+      let started = false;
+      return {
+        value: b.map((x, i) => {
+          if (!Number.isFinite(x) || !Number.isFinite(s[i])) return started ? acc : NaN;
+          started = true;
+          acc += x - s[i];
+          return acc;
+        }),
+      };
+    },
+  },
   // ---- Moving averages ----
-  ma('sma', 'Simple Moving Average (SMA)', '#2962ff', ta.sma),
-  ma('ema', 'Exponential Moving Average (EMA)', '#ff9800', ta.ema),
+  ma('sma', 'Simple Moving Average (SMA)', '#00e5ff', ta.sma),
+  ma('ema', 'Exponential Moving Average (EMA)', '#ffb800', ta.ema),
   ma('wma', 'Weighted Moving Average (WMA)', '#ab47bc', ta.wma),
-  ma('hma', 'Hull Moving Average (HMA)', '#26a69a', ta.hma),
+  ma('hma', 'Hull Moving Average (HMA)', '#1de9b6', ta.hma),
   ma('rma', 'Smoothed Moving Average (SMMA/RMA)', '#8d6e63', ta.rma),
   ma('dema', 'Double EMA (DEMA)', '#ec407a', (s, n) => {
     const e1 = ta.ema(s, n);
     const e2 = ta.ema(e1, n);
     return e1.map((v, i) => 2 * v - e2[i]);
   }),
-  ma('tema', 'Triple EMA (TEMA)', '#7e57c2', (s, n) => {
+  ma('tema', 'Triple EMA (TEMA)', '#b388ff', (s, n) => {
     const e1 = ta.ema(s, n);
     const e2 = ta.ema(e1, n);
     const e3 = ta.ema(e2, n);
@@ -113,9 +245,9 @@ export const INDICATORS: IndicatorDef[] = [
     overlay: true,
     params: [len(20), num('mult', 'StdDev', 2, 0.1, 0.1), src],
     outputs: [
-      { key: 'upper', label: 'Boven', type: 'line', color: '#f23645' },
-      { key: 'basis', label: 'Basis', type: 'line', color: '#ff9800' },
-      { key: 'lower', label: 'Onder', type: 'line', color: '#089981' },
+      { key: 'upper', label: 'Boven', type: 'line', color: '#ff3b6b' },
+      { key: 'basis', label: 'Basis', type: 'line', color: '#ffb800' },
+      { key: 'lower', label: 'Onder', type: 'line', color: '#00ffa3' },
     ],
     compute: (c, p) => ta.bollinger(S(c, p), N(p, 'length'), N(p, 'mult')),
   },
@@ -126,9 +258,9 @@ export const INDICATORS: IndicatorDef[] = [
     overlay: true,
     params: [len(20), num('mult', 'Multiplier', 2, 0.1, 0.1), num('atr', 'ATR lengte', 10)],
     outputs: [
-      { key: 'upper', label: 'Boven', type: 'line', color: '#2962ff' },
-      { key: 'basis', label: 'Basis', type: 'line', color: '#2962ff', dashed: true },
-      { key: 'lower', label: 'Onder', type: 'line', color: '#2962ff' },
+      { key: 'upper', label: 'Boven', type: 'line', color: '#00e5ff' },
+      { key: 'basis', label: 'Basis', type: 'line', color: '#00e5ff', dashed: true },
+      { key: 'lower', label: 'Onder', type: 'line', color: '#00e5ff' },
     ],
     compute: (c, p) => {
       const basis = ta.ema(ta.source(c), N(p, 'length'));
@@ -147,9 +279,9 @@ export const INDICATORS: IndicatorDef[] = [
     overlay: true,
     params: [len(20)],
     outputs: [
-      { key: 'upper', label: 'Boven', type: 'line', color: '#26a69a' },
-      { key: 'mid', label: 'Midden', type: 'line', color: '#ff6d00', dashed: true },
-      { key: 'lower', label: 'Onder', type: 'line', color: '#ef5350' },
+      { key: 'upper', label: 'Boven', type: 'line', color: '#1de9b6' },
+      { key: 'mid', label: 'Midden', type: 'line', color: '#ff8a00', dashed: true },
+      { key: 'lower', label: 'Onder', type: 'line', color: '#ff5c8a' },
     ],
     compute: (c, p) => {
       const upper = ta.highest(
@@ -170,9 +302,9 @@ export const INDICATORS: IndicatorDef[] = [
     overlay: true,
     params: [len(20), num('pct', 'Procent', 2.5, 0.1, 0.1)],
     outputs: [
-      { key: 'upper', label: 'Boven', type: 'line', color: '#2962ff' },
-      { key: 'basis', label: 'Basis', type: 'line', color: '#ff6d00' },
-      { key: 'lower', label: 'Onder', type: 'line', color: '#2962ff' },
+      { key: 'upper', label: 'Boven', type: 'line', color: '#00e5ff' },
+      { key: 'basis', label: 'Basis', type: 'line', color: '#ff8a00' },
+      { key: 'lower', label: 'Onder', type: 'line', color: '#00e5ff' },
     ],
     compute: (c, p) => {
       const basis = ta.sma(ta.source(c), N(p, 'length'));
@@ -189,7 +321,7 @@ export const INDICATORS: IndicatorDef[] = [
     overlay: true,
     params: [num('conv', 'Tenkan', 9), num('base', 'Kijun', 26), num('spanB', 'Senkou B', 52), num('disp', 'Verschuiving', 26)],
     outputs: [
-      { key: 'tenkan', label: 'Tenkan', type: 'line', color: '#2962ff' },
+      { key: 'tenkan', label: 'Tenkan', type: 'line', color: '#00e5ff' },
       { key: 'kijun', label: 'Kijun', type: 'line', color: '#b71c1c' },
       { key: 'chikou', label: 'Chikou', type: 'line', color: '#43a047', offset: (p) => -(N(p, 'disp') - 1) },
       { key: 'spanA', label: 'Senkou A', type: 'line', color: '#a5d6a7', offset: (p) => N(p, 'disp') - 1 },
@@ -203,7 +335,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Trend',
     overlay: true,
     params: [num('start', 'Start', 0.02, 0.01, 0.001), num('inc', 'Stap', 0.02, 0.01, 0.001), num('max', 'Max', 0.2, 0.01, 0.01)],
-    outputs: [{ key: 'value', label: 'SAR', type: 'line', color: '#2962ff', lineWidth: 1, dashed: true }],
+    outputs: [{ key: 'value', label: 'SAR', type: 'line', color: '#00e5ff', lineWidth: 1, dashed: true }],
     compute: (c, p) => ({ value: ta.parabolicSar(c, N(p, 'start'), N(p, 'inc'), N(p, 'max')) }),
   },
   {
@@ -213,8 +345,8 @@ export const INDICATORS: IndicatorDef[] = [
     overlay: true,
     params: [num('length', 'ATR lengte', 10), num('mult', 'Factor', 3, 0.1, 0.1)],
     outputs: [
-      { key: 'up', label: 'Op', type: 'line', color: '#089981', lineWidth: 2 },
-      { key: 'down', label: 'Neer', type: 'line', color: '#f23645', lineWidth: 2 },
+      { key: 'up', label: 'Op', type: 'line', color: '#00ffa3', lineWidth: 2 },
+      { key: 'down', label: 'Neer', type: 'line', color: '#ff3b6b', lineWidth: 2 },
     ],
     compute: (c, p) => ta.supertrend(c, N(p, 'length'), N(p, 'mult')),
   },
@@ -225,9 +357,9 @@ export const INDICATORS: IndicatorDef[] = [
     overlay: false,
     params: [num('di', 'DI lengte', 14), num('adx', 'ADX smoothing', 14)],
     outputs: [
-      { key: 'adx', label: 'ADX', type: 'line', color: '#ff9800', lineWidth: 2 },
-      { key: 'plus', label: '+DI', type: 'line', color: '#089981' },
-      { key: 'minus', label: '-DI', type: 'line', color: '#f23645' },
+      { key: 'adx', label: 'ADX', type: 'line', color: '#ffb800', lineWidth: 2 },
+      { key: 'plus', label: '+DI', type: 'line', color: '#00ffa3' },
+      { key: 'minus', label: '-DI', type: 'line', color: '#ff3b6b' },
     ],
     levels: [25],
     compute: (c, p) => ta.dmi(c, N(p, 'di'), N(p, 'adx')),
@@ -239,8 +371,8 @@ export const INDICATORS: IndicatorDef[] = [
     overlay: false,
     params: [len(14)],
     outputs: [
-      { key: 'up', label: 'Up', type: 'line', color: '#ff6d00' },
-      { key: 'down', label: 'Down', type: 'line', color: '#2962ff' },
+      { key: 'up', label: 'Up', type: 'line', color: '#ff8a00' },
+      { key: 'down', label: 'Down', type: 'line', color: '#00e5ff' },
     ],
     compute: (c, p) => ta.aroon(c, N(p, 'length')),
   },
@@ -250,7 +382,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Trend',
     overlay: false,
     params: [len(14)],
-    outputs: [{ key: 'value', label: 'CHOP', type: 'line', color: '#2962ff' }],
+    outputs: [{ key: 'value', label: 'CHOP', type: 'line', color: '#00e5ff' }],
     levels: [38.2, 61.8],
     compute: (c, p) => {
       const n = N(p, 'length');
@@ -274,7 +406,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Oscillators',
     overlay: false,
     params: [len(14), src],
-    outputs: [{ key: 'value', label: 'RSI', type: 'line', color: '#7e57c2' }],
+    outputs: [{ key: 'value', label: 'RSI', type: 'line', color: '#b388ff' }],
     levels: [30, 50, 70],
     compute: (c, p) => ({ value: ta.rsi(S(c, p), N(p, 'length')) }),
   },
@@ -285,9 +417,9 @@ export const INDICATORS: IndicatorDef[] = [
     overlay: false,
     params: [num('fast', 'Snel', 12), num('slow', 'Traag', 26), num('signal', 'Signaal', 9), src],
     outputs: [
-      { key: 'hist', label: 'Histogram', type: 'histogram', color: '#26a69a', colorBy: 'sign' },
-      { key: 'macd', label: 'MACD', type: 'line', color: '#2962ff' },
-      { key: 'signal', label: 'Signaal', type: 'line', color: '#ff6d00' },
+      { key: 'hist', label: 'Histogram', type: 'histogram', color: '#1de9b6', colorBy: 'sign' },
+      { key: 'macd', label: 'MACD', type: 'line', color: '#00e5ff' },
+      { key: 'signal', label: 'Signaal', type: 'line', color: '#ff8a00' },
     ],
     levels: [0],
     compute: (c, p) => ta.macd(S(c, p), N(p, 'fast'), N(p, 'slow'), N(p, 'signal')),
@@ -299,8 +431,8 @@ export const INDICATORS: IndicatorDef[] = [
     overlay: false,
     params: [len(14, '%K lengte'), num('smoothK', '%K smoothing', 1), num('smoothD', '%D smoothing', 3)],
     outputs: [
-      { key: 'k', label: '%K', type: 'line', color: '#2962ff' },
-      { key: 'd', label: '%D', type: 'line', color: '#ff6d00' },
+      { key: 'k', label: '%K', type: 'line', color: '#00e5ff' },
+      { key: 'd', label: '%D', type: 'line', color: '#ff8a00' },
     ],
     levels: [20, 80],
     compute: (c, p) => ta.stochastic(c, N(p, 'length'), N(p, 'smoothK'), N(p, 'smoothD')),
@@ -312,8 +444,8 @@ export const INDICATORS: IndicatorDef[] = [
     overlay: false,
     params: [num('rsi', 'RSI lengte', 14), num('stoch', 'Stoch lengte', 14), num('smoothK', 'K', 3), num('smoothD', 'D', 3)],
     outputs: [
-      { key: 'k', label: 'K', type: 'line', color: '#2962ff' },
-      { key: 'd', label: 'D', type: 'line', color: '#ff6d00' },
+      { key: 'k', label: 'K', type: 'line', color: '#00e5ff' },
+      { key: 'd', label: 'D', type: 'line', color: '#ff8a00' },
     ],
     levels: [20, 80],
     compute: (c, p) => ta.stochRsi(ta.source(c), N(p, 'rsi'), N(p, 'stoch'), N(p, 'smoothK'), N(p, 'smoothD')),
@@ -324,7 +456,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Oscillators',
     overlay: false,
     params: [len(20)],
-    outputs: [{ key: 'value', label: 'CCI', type: 'line', color: '#2962ff' }],
+    outputs: [{ key: 'value', label: 'CCI', type: 'line', color: '#00e5ff' }],
     levels: [-100, 0, 100],
     compute: (c, p) => ({ value: ta.cci(c, N(p, 'length')) }),
   },
@@ -334,7 +466,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Oscillators',
     overlay: false,
     params: [len(14)],
-    outputs: [{ key: 'value', label: '%R', type: 'line', color: '#7e57c2' }],
+    outputs: [{ key: 'value', label: '%R', type: 'line', color: '#b388ff' }],
     levels: [-80, -20],
     compute: (c, p) => ({ value: ta.williamsR(c, N(p, 'length')) }),
   },
@@ -344,7 +476,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Oscillators',
     overlay: false,
     params: [len(9), src],
-    outputs: [{ key: 'value', label: 'ROC', type: 'line', color: '#2962ff' }],
+    outputs: [{ key: 'value', label: 'ROC', type: 'line', color: '#00e5ff' }],
     levels: [0],
     compute: (c, p) => {
       const s = S(c, p);
@@ -358,7 +490,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Oscillators',
     overlay: false,
     params: [len(10), src],
-    outputs: [{ key: 'value', label: 'MOM', type: 'line', color: '#2962ff' }],
+    outputs: [{ key: 'value', label: 'MOM', type: 'line', color: '#00e5ff' }],
     levels: [0],
     compute: (c, p) => ({ value: ta.change(S(c, p), N(p, 'length')) }),
   },
@@ -368,7 +500,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Oscillators',
     overlay: false,
     params: [],
-    outputs: [{ key: 'value', label: 'AO', type: 'histogram', color: '#26a69a', colorBy: 'sign' }],
+    outputs: [{ key: 'value', label: 'AO', type: 'histogram', color: '#1de9b6', colorBy: 'sign' }],
     compute: (c) => {
       const hl2 = ta.source(c, 'hl2');
       const f = ta.sma(hl2, 5);
@@ -382,7 +514,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Oscillators',
     overlay: false,
     params: [len(18)],
-    outputs: [{ key: 'value', label: 'TRIX', type: 'line', color: '#f23645' }],
+    outputs: [{ key: 'value', label: 'TRIX', type: 'line', color: '#ff3b6b' }],
     levels: [0],
     compute: (c, p) => {
       const n = N(p, 'length');
@@ -396,7 +528,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Oscillators',
     overlay: false,
     params: [num('fast', 'Snel', 7), num('mid', 'Midden', 14), num('slow', 'Traag', 28)],
-    outputs: [{ key: 'value', label: 'UO', type: 'line', color: '#f23645' }],
+    outputs: [{ key: 'value', label: 'UO', type: 'line', color: '#ff3b6b' }],
     levels: [30, 70],
     compute: (c, p) => {
       const bp = c.map((x, i) => x.close - Math.min(x.low, i ? c[i - 1].close : x.low));
@@ -418,7 +550,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Oscillators',
     overlay: false,
     params: [len(9)],
-    outputs: [{ key: 'value', label: 'CMO', type: 'line', color: '#2962ff' }],
+    outputs: [{ key: 'value', label: 'CMO', type: 'line', color: '#00e5ff' }],
     levels: [-50, 0, 50],
     compute: (c, p) => {
       const ch = ta.change(ta.source(c));
@@ -459,8 +591,8 @@ export const INDICATORS: IndicatorDef[] = [
     overlay: false,
     params: [num('ma', 'MA lengte', 20)],
     outputs: [
-      { key: 'volume', label: 'Volume', type: 'histogram', color: '#26a69a', colorBy: 'candle' },
-      { key: 'ma', label: 'MA', type: 'line', color: '#2962ff' },
+      { key: 'volume', label: 'Volume', type: 'histogram', color: '#1de9b6', colorBy: 'candle' },
+      { key: 'ma', label: 'MA', type: 'line', color: '#00e5ff' },
     ],
     compute: (c, p) => {
       const v = c.map((x) => x.volume);
@@ -473,7 +605,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Volume',
     overlay: false,
     params: [],
-    outputs: [{ key: 'value', label: 'OBV', type: 'line', color: '#2962ff' }],
+    outputs: [{ key: 'value', label: 'OBV', type: 'line', color: '#00e5ff' }],
     compute: (c) => ({ value: ta.obv(c) }),
   },
   {
@@ -482,7 +614,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Volume',
     overlay: false,
     params: [len(14)],
-    outputs: [{ key: 'value', label: 'MFI', type: 'line', color: '#7e57c2' }],
+    outputs: [{ key: 'value', label: 'MFI', type: 'line', color: '#b388ff' }],
     levels: [20, 80],
     compute: (c, p) => ({ value: ta.mfi(c, N(p, 'length')) }),
   },
@@ -502,7 +634,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Volume',
     overlay: false,
     params: [],
-    outputs: [{ key: 'value', label: 'A/D', type: 'line', color: '#ff9800' }],
+    outputs: [{ key: 'value', label: 'A/D', type: 'line', color: '#ffb800' }],
     compute: (c) => ({ value: ta.accDist(c) }),
   },
   {
@@ -511,7 +643,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Volume',
     overlay: false,
     params: [len(13)],
-    outputs: [{ key: 'value', label: 'EFI', type: 'line', color: '#f23645' }],
+    outputs: [{ key: 'value', label: 'EFI', type: 'line', color: '#ff3b6b' }],
     levels: [0],
     compute: (c, p) => ({
       value: ta.ema(
@@ -528,7 +660,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Volatility',
     overlay: false,
     params: [len(14)],
-    outputs: [{ key: 'value', label: 'ATR', type: 'line', color: '#f23645' }],
+    outputs: [{ key: 'value', label: 'ATR', type: 'line', color: '#ff3b6b' }],
     compute: (c, p) => ({ value: ta.atr(c, N(p, 'length')) }),
   },
   {
@@ -537,7 +669,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Volatility',
     overlay: false,
     params: [len(20), src],
-    outputs: [{ key: 'value', label: 'StdDev', type: 'line', color: '#2962ff' }],
+    outputs: [{ key: 'value', label: 'StdDev', type: 'line', color: '#00e5ff' }],
     compute: (c, p) => ({ value: ta.stdev(S(c, p), N(p, 'length')) }),
   },
   {
@@ -546,7 +678,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Volatility',
     overlay: false,
     params: [len(20), num('mult', 'StdDev', 2, 0.1, 0.1)],
-    outputs: [{ key: 'value', label: 'BBW', type: 'line', color: '#2962ff' }],
+    outputs: [{ key: 'value', label: 'BBW', type: 'line', color: '#00e5ff' }],
     compute: (c, p) => {
       const b = ta.bollinger(ta.source(c), N(p, 'length'), N(p, 'mult'));
       return { value: b.basis.map((m, i) => (100 * (b.upper[i] - b.lower[i])) / m) };
@@ -558,7 +690,7 @@ export const INDICATORS: IndicatorDef[] = [
     category: 'Volatility',
     overlay: false,
     params: [len(10), num('annual', 'Bars per jaar', 365)],
-    outputs: [{ key: 'value', label: 'HV', type: 'line', color: '#2962ff' }],
+    outputs: [{ key: 'value', label: 'HV', type: 'line', color: '#00e5ff' }],
     compute: (c, p) => {
       const s = ta.source(c);
       const r = s.map((v, i) => (i ? Math.log(v / s[i - 1]) : NaN));

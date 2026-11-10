@@ -1,5 +1,7 @@
 import type { Candle, ParamDef, Params, Series } from './types';
 import * as ta from './ta';
+import { align, type ExtData } from './indicators';
+import type { ExtKind } from './exchanges/types';
 
 export interface Signals {
   entryLong: boolean[];
@@ -8,14 +10,18 @@ export interface Signals {
   exitShort: boolean[];
 }
 
+type IndRef = { id: string; params: Params };
+
 export interface StrategyDef {
   id: string;
   name: string;
   description: string;
   params: ParamDef[];
   /** Indicators to draw on the chart while this strategy is active. */
-  indicators?: (p: Params) => { id: string; params: Params }[];
-  signals(c: Candle[], p: Params): Signals;
+  indicators?: (p: Params) => IndRef[];
+  /** Futures data the strategy needs */
+  external?: ExtKind[];
+  signals(c: Candle[], p: Params, ext: ExtData): Signals;
 }
 
 const num = (key: string, label: string, def: number, step = 1, min = 1): ParamDef => ({
@@ -49,11 +55,41 @@ const maFn = (t: unknown) => (t === 'SMA' ? ta.sma : t === 'WMA' ? ta.wma : t ==
 
 export const STRATEGIES: StrategyDef[] = [
   {
+    id: 'funding_contra',
+    name: '⚡ Funding Contrarian',
+    description:
+      'Futures: ga tegen de massa in. Short als de funding uitzonderlijk hoog is vergeleken met normaal (te veel longs), long als hij uitzonderlijk laag is. Sluit als funding weer normaal wordt. Werkt met de echte funding-historie (~3 maanden).',
+    params: [num('lookback', 'Vergelijk met laatste N bars', 240, 10, 20), num('z', 'Extreem bij z-score', 2, 0.1, 0.5), num('trend', 'Trend EMA (0 = uit)', 0, 1, 0)],
+    external: ['funding'],
+    indicators: (p): IndRef[] => [{ id: 'funding', params: { mode: 'Per periode %' } }, ...(N(p, 'trend') > 0 ? [{ id: 'ema', params: { length: p.trend, source: 'close' } }] : [])],
+    signals: (c, p, ext) => {
+      const f = align(c, ext.funding);
+      const L = N(p, 'lookback');
+      const mean = ta.sma(f, L);
+      const sd = ta.stdev(f, L);
+      // How unusual the current funding is compared with the recent past.
+      const z = f.map((v, i) => (sd[i] > 0 ? (v - mean[i]) / sd[i] : 0));
+      const zt = N(p, 'z');
+      const e = N(p, 'trend') > 0 ? ta.ema(close(c), N(p, 'trend')) : null;
+      const s = blank(c.length);
+      for (let i = 1; i < c.length; i++) {
+        if (!Number.isFinite(f[i]) || !Number.isFinite(mean[i])) continue;
+        const okLong = !e || c[i].close > e[i];
+        const okShort = !e || c[i].close < e[i];
+        s.entryLong[i] = z[i] <= -zt && z[i - 1] > -zt && okLong;
+        s.entryShort[i] = z[i] >= zt && z[i - 1] < zt && okShort;
+        s.exitLong[i] = z[i] > -0.5 && z[i - 1] <= -0.5;
+        s.exitShort[i] = z[i] < 0.5 && z[i - 1] >= 0.5;
+      }
+      return s;
+    },
+  },
+  {
     id: 'ma_cross',
     name: 'MA Crossover',
     description: 'Koop als het snelle gemiddelde boven het trage kruist, verkoop bij kruising omlaag.',
     params: [num('fast', 'Snel', 9), num('slow', 'Traag', 21), maType],
-    indicators: (p) => [
+    indicators: (p): IndRef[] => [
       { id: String(p.type).toLowerCase(), params: { length: p.fast, source: 'close' } },
       { id: String(p.type).toLowerCase(), params: { length: p.slow, source: 'close' } },
     ],
@@ -68,7 +104,7 @@ export const STRATEGIES: StrategyDef[] = [
     name: 'Golden / Death Cross (50/200)',
     description: 'Klassieke lange-termijn trend: SMA 50 kruist SMA 200.',
     params: [num('fast', 'Snel', 50), num('slow', 'Traag', 200)],
-    indicators: (p) => [{ id: 'macross', params: { fast: p.fast, slow: p.slow, type: 'SMA' } }],
+    indicators: (p): IndRef[] => [{ id: 'macross', params: { fast: p.fast, slow: p.slow, type: 'SMA' } }],
     signals: (c, p) => {
       const f = ta.sma(close(c), N(p, 'fast'));
       const s = ta.sma(close(c), N(p, 'slow'));
@@ -80,7 +116,7 @@ export const STRATEGIES: StrategyDef[] = [
     name: 'RSI Overbought/Oversold',
     description: 'Koop als RSI terug boven oversold kruist, verkoop als hij onder overbought zakt.',
     params: [num('length', 'RSI lengte', 14), num('os', 'Oversold', 30), num('ob', 'Overbought', 70)],
-    indicators: (p) => [{ id: 'rsi', params: { length: p.length, source: 'close' } }],
+    indicators: (p): IndRef[] => [{ id: 'rsi', params: { length: p.length, source: 'close' } }],
     signals: (c, p) => {
       const r = ta.rsi(close(c), N(p, 'length'));
       const os = new Array(c.length).fill(N(p, 'os'));
@@ -93,7 +129,7 @@ export const STRATEGIES: StrategyDef[] = [
     name: 'MACD Signal Cross',
     description: 'Koop als MACD boven de signaallijn kruist, verkoop bij kruising omlaag.',
     params: [num('fast', 'Snel', 12), num('slow', 'Traag', 26), num('signal', 'Signaal', 9)],
-    indicators: (p) => [{ id: 'macd', params: { fast: p.fast, slow: p.slow, signal: p.signal, source: 'close' } }],
+    indicators: (p): IndRef[] => [{ id: 'macd', params: { fast: p.fast, slow: p.slow, signal: p.signal, source: 'close' } }],
     signals: (c, p) => {
       const m = ta.macd(close(c), N(p, 'fast'), N(p, 'slow'), N(p, 'signal'));
       return fromEvents(c.length, (i) => ta.crossover(m.macd, m.signal, i), (i) => ta.crossunder(m.macd, m.signal, i));
@@ -104,7 +140,7 @@ export const STRATEGIES: StrategyDef[] = [
     name: 'Bollinger Mean Reversion',
     description: 'Koop als prijs terug boven de onderste band komt, sluit bij de middenlijn (short omgekeerd).',
     params: [num('length', 'Lengte', 20), num('mult', 'StdDev', 2, 0.1, 0.1)],
-    indicators: (p) => [{ id: 'bb', params: { length: p.length, mult: p.mult, source: 'close' } }],
+    indicators: (p): IndRef[] => [{ id: 'bb', params: { length: p.length, mult: p.mult, source: 'close' } }],
     signals: (c, p) => {
       const cl = close(c);
       const b = ta.bollinger(cl, N(p, 'length'), N(p, 'mult'));
@@ -123,7 +159,7 @@ export const STRATEGIES: StrategyDef[] = [
     name: 'Bollinger Breakout',
     description: 'Koop bij een slot boven de bovenste band, sluit onder de middenlijn (short omgekeerd).',
     params: [num('length', 'Lengte', 20), num('mult', 'StdDev', 2, 0.1, 0.1)],
-    indicators: (p) => [{ id: 'bb', params: { length: p.length, mult: p.mult, source: 'close' } }],
+    indicators: (p): IndRef[] => [{ id: 'bb', params: { length: p.length, mult: p.mult, source: 'close' } }],
     signals: (c, p) => {
       const cl = close(c);
       const b = ta.bollinger(cl, N(p, 'length'), N(p, 'mult'));
@@ -142,7 +178,7 @@ export const STRATEGIES: StrategyDef[] = [
     name: 'SuperTrend',
     description: 'Volg de trend: koop als SuperTrend naar boven omslaat, verkoop als hij omlaag omslaat.',
     params: [num('length', 'ATR lengte', 10), num('mult', 'Factor', 3, 0.1, 0.1)],
-    indicators: (p) => [{ id: 'supertrend', params: { length: p.length, mult: p.mult } }],
+    indicators: (p): IndRef[] => [{ id: 'supertrend', params: { length: p.length, mult: p.mult } }],
     signals: (c, p) => {
       const { dir } = ta.supertrend(c, N(p, 'length'), N(p, 'mult'));
       return fromEvents(c.length, (i) => i > 0 && dir[i] === 1 && dir[i - 1] === -1, (i) => i > 0 && dir[i] === -1 && dir[i - 1] === 1);
@@ -153,7 +189,7 @@ export const STRATEGIES: StrategyDef[] = [
     name: 'Donchian Breakout (Turtle)',
     description: 'Koop bij een nieuwe N-bar high, sluit bij een M-bar low (short omgekeerd).',
     params: [num('entry', 'Entry lengte', 20), num('exit', 'Exit lengte', 10)],
-    indicators: (p) => [{ id: 'donchian', params: { length: p.entry } }],
+    indicators: (p): IndRef[] => [{ id: 'donchian', params: { length: p.entry } }],
     signals: (c, p) => {
       const hi = c.map((x) => x.high);
       const lo = c.map((x) => x.low);
@@ -176,7 +212,7 @@ export const STRATEGIES: StrategyDef[] = [
     name: 'Stochastic Cross',
     description: 'Koop als %K boven %D kruist in de oversold-zone, verkoop bij kruising omlaag in overbought.',
     params: [num('length', '%K lengte', 14), num('smoothK', '%K smoothing', 3), num('smoothD', '%D', 3), num('os', 'Oversold', 20), num('ob', 'Overbought', 80)],
-    indicators: (p) => [{ id: 'stoch', params: { length: p.length, smoothK: p.smoothK, smoothD: p.smoothD } }],
+    indicators: (p): IndRef[] => [{ id: 'stoch', params: { length: p.length, smoothK: p.smoothK, smoothD: p.smoothD } }],
     signals: (c, p) => {
       const { k, d } = ta.stochastic(c, N(p, 'length'), N(p, 'smoothK'), N(p, 'smoothD'));
       return fromEvents(
@@ -191,7 +227,7 @@ export const STRATEGIES: StrategyDef[] = [
     name: 'Parabolic SAR Flip',
     description: 'Koop als prijs boven de SAR komt, verkoop als hij eronder zakt.',
     params: [num('start', 'Start', 0.02, 0.01, 0.001), num('inc', 'Stap', 0.02, 0.01, 0.001), num('max', 'Max', 0.2, 0.01, 0.01)],
-    indicators: (p) => [{ id: 'psar', params: { start: p.start, inc: p.inc, max: p.max } }],
+    indicators: (p): IndRef[] => [{ id: 'psar', params: { start: p.start, inc: p.inc, max: p.max } }],
     signals: (c, p) => {
       const sar = ta.parabolicSar(c, N(p, 'start'), N(p, 'inc'), N(p, 'max'));
       const cl = close(c);
@@ -203,7 +239,7 @@ export const STRATEGIES: StrategyDef[] = [
     name: 'Ichimoku Cloud Breakout',
     description: 'Koop als prijs boven de wolk uitbreekt en Tenkan > Kijun, verkoop omgekeerd.',
     params: [num('conv', 'Tenkan', 9), num('base', 'Kijun', 26), num('spanB', 'Senkou B', 52), num('disp', 'Verschuiving', 26)],
-    indicators: (p) => [{ id: 'ichimoku', params: { conv: p.conv, base: p.base, spanB: p.spanB, disp: p.disp } }],
+    indicators: (p): IndRef[] => [{ id: 'ichimoku', params: { conv: p.conv, base: p.base, spanB: p.spanB, disp: p.disp } }],
     signals: (c, p) => {
       const ich = ta.ichimoku(c, N(p, 'conv'), N(p, 'base'), N(p, 'spanB'));
       const d = N(p, 'disp') - 1;
@@ -222,7 +258,7 @@ export const STRATEGIES: StrategyDef[] = [
     name: 'ADX Trend + DI Cross',
     description: 'Koop als +DI boven -DI kruist terwijl ADX een sterke trend aangeeft.',
     params: [num('di', 'DI lengte', 14), num('adx', 'ADX smoothing', 14), num('threshold', 'ADX minimum', 25)],
-    indicators: (p) => [{ id: 'adx', params: { di: p.di, adx: p.adx } }],
+    indicators: (p): IndRef[] => [{ id: 'adx', params: { di: p.di, adx: p.adx } }],
     signals: (c, p) => {
       const d = ta.dmi(c, N(p, 'di'), N(p, 'adx'));
       const t = N(p, 'threshold');
@@ -238,7 +274,7 @@ export const STRATEGIES: StrategyDef[] = [
     name: 'Trendfilter + RSI Pullback',
     description: 'Alleen kopen boven EMA 200 als RSI een dip maakt; alleen shorten eronder bij een piek.',
     params: [num('trend', 'Trend EMA', 200), num('length', 'RSI lengte', 14), num('os', 'Oversold', 35), num('ob', 'Overbought', 65)],
-    indicators: (p) => [
+    indicators: (p): IndRef[] => [
       { id: 'ema', params: { length: p.trend, source: 'close' } },
       { id: 'rsi', params: { length: p.length, source: 'close' } },
     ],
@@ -279,10 +315,11 @@ SMA(n) EMA(n) WMA(n) HMA(n) VWAP RSI(n) ATR(n) CCI(n) MFI(n) WILLR(n) ROC(n) OBV
 ADX(n) PLUSDI(n) MINUSDI(n) MACD(f,s,sig) MACDSIGNAL(f,s,sig) MACDHIST(f,s,sig)
 BBUPPER(n,k) BBMID(n,k) BBLOWER(n,k) STOCHK(n,k,d) STOCHD(n,k,d)
 HIGHEST(n) LOWEST(n) SUPERTREND(n,f) PSAR  — gebruik PREV(...) voor de vorige bar
+Futures: FUNDING = funding rate in % per periode (echte historie), bv. FUNDING > 0.03
 Operatoren: crosses above, crosses below, >, <, >=, <=
 Combineer met AND / OR, bv: EMA(9) crosses above EMA(21) AND RSI(14) > 50`;
 
-function operand(c: Candle[], raw: string, cache: Map<string, Series>): Series {
+function operand(c: Candle[], raw: string, cache: Map<string, Series>, ext: ExtData = {}): Series {
   const key = raw.trim().toUpperCase().replace(/\s+/g, '');
   const hit = cache.get(key);
   if (hit) return hit;
@@ -298,6 +335,8 @@ function operand(c: Candle[], raw: string, cache: Map<string, Series>): Series {
     out = ta.obv(c);
   } else if (key === 'VWAP') {
     out = ta.vwap(c, 'Session', ta.source(c, 'hlc3'));
+  } else if (key === 'FUNDING') {
+    out = align(c, ext.funding).map((v) => v * 100);
   } else if (key === 'PSAR') {
     out = ta.parabolicSar(c, 0.02, 0.02, 0.2);
   } else {
@@ -305,7 +344,7 @@ function operand(c: Candle[], raw: string, cache: Map<string, Series>): Series {
     if (!m) throw new Error(`Onbekende operand: "${raw.trim()}"`);
     const fn = m[1];
     if (fn === 'PREV') {
-      const inner = operand(c, m[2], cache);
+      const inner = operand(c, m[2], cache, ext);
       out = inner.map((_, i) => (i > 0 ? inner[i - 1] : NaN));
     } else {
       const a = m[2] ? m[2].split(',').map(Number) : [];
@@ -364,7 +403,7 @@ function operand(c: Candle[], raw: string, cache: Map<string, Series>): Series {
 }
 
 /** Compile a rule string into a per-bar boolean array. Empty rule = never true. */
-export function evalRule(c: Candle[], rule: string, cache = new Map<string, Series>()): boolean[] {
+export function evalRule(c: Candle[], rule: string, cache = new Map<string, Series>(), ext: ExtData = {}): boolean[] {
   const res = new Array<boolean>(c.length).fill(false);
   if (!rule.trim()) return res;
   const orParts = rule.split(/\s+OR\s+/i);
@@ -372,7 +411,7 @@ export function evalRule(c: Candle[], rule: string, cache = new Map<string, Seri
     part.split(/\s+AND\s+/i).map((cond) => {
       const m = /^(.+?)\s*(crosses\s+above|crosses\s+below|>=|<=|>|<)\s*(.+)$/i.exec(cond.trim());
       if (!m) throw new Error(`Kan regel niet lezen: "${cond.trim()}"`);
-      return { a: operand(c, m[1], cache), op: m[2].toLowerCase().replace(/\s+/g, ' '), b: operand(c, m[3], cache) };
+      return { a: operand(c, m[1], cache, ext), op: m[2].toLowerCase().replace(/\s+/g, ' '), b: operand(c, m[3], cache, ext) };
     }),
   );
   for (let i = 0; i < c.length; i++) {
@@ -400,12 +439,20 @@ export interface CustomRules {
   exitShort: string;
 }
 
-export function customSignals(c: Candle[], r: CustomRules): Signals {
+/** Which futures data series a set of custom rules refers to. */
+export function rulesExternal(r: CustomRules): ExtKind[] {
+  const text = Object.values(r).join(' ').toUpperCase();
+  const out: ExtKind[] = [];
+  if (/\bFUNDING\b/.test(text)) out.push('funding');
+  return out;
+}
+
+export function customSignals(c: Candle[], r: CustomRules, ext: ExtData = {}): Signals {
   const cache = new Map<string, Series>();
   return {
-    entryLong: evalRule(c, r.entryLong, cache),
-    exitLong: evalRule(c, r.exitLong, cache),
-    entryShort: evalRule(c, r.entryShort, cache),
-    exitShort: evalRule(c, r.exitShort, cache),
+    entryLong: evalRule(c, r.entryLong, cache, ext),
+    exitLong: evalRule(c, r.exitLong, cache, ext),
+    entryShort: evalRule(c, r.entryShort, cache, ext),
+    exitShort: evalRule(c, r.exitShort, cache, ext),
   };
 }

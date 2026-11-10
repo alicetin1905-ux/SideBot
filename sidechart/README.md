@@ -1,15 +1,14 @@
-# SideChart
+# SideChart · Futures Terminal
 
-Een eigen chart- en backtest-app in de browser: live grafieken, 44 indicatoren,
-elke timeframe, tekentools, prijsalarmen en een ingebouwde **strategy tester met optimizer**.
+A futuristic chart-and-backtest terminal for **crypto perpetual futures** (USDT-margined),
+running entirely in the browser. It uses live data from **OKX** and **Bitget**: no account, API key or server needed.
 
-> SideChart is een zelfgebouwde app en heeft niets te maken met TradingView.
-> Voor het tekenen van de grafiek gebruikt hij de open-source bibliotheek
-> [Lightweight Charts™](https://github.com/tradingview/lightweight-charts) (Apache 2.0).
+> SideChart is a self-built app and has nothing to do with TradingView. The chart itself is drawn
+> with the open-source library [Lightweight Charts™](https://github.com/tradingview/lightweight-charts) (Apache 2.0).
 
-## Starten
+## Getting started
 
-Je hebt [Node.js](https://nodejs.org) 20 of nieuwer nodig.
+You need [Node.js](https://nodejs.org) 20 or newer.
 
 ```bash
 cd sidechart
@@ -17,86 +16,86 @@ npm install
 npm run dev        # open http://localhost:5173
 ```
 
-Een versie bouwen om online te zetten (bijvoorbeeld GitHub Pages, Netlify of Vercel):
-
 ```bash
-npm run build      # resultaat in sidechart/dist/ — gewoon statische bestanden
-npm test           # 76 unit tests voor indicatoren, strategieën en backtester
+npm run build      # static files in sidechart/dist/ (GitHub Pages, Netlify, Vercel, …)
+npm test           # 91 unit tests (indicators, strategies, futures backtester, calculator)
 ```
 
-## Wat zit erin
+## Features
 
-**Markten en data**
-- Alle spot-paren van Binance (BTCUSDT, ETHUSDT, …), live via WebSocket, zonder API-key.
-- **Eigen data via CSV** (aandelen, forex, wat je maar wilt): kolommen `date/time, open, high, low, close, volume`.
-- Tot 50.000 bars historie, voor lange backtests.
+**Futures data (live)**
+- All USDT perpetuals on OKX (500+) and Bitget (800+); switch exchange at the top left.
+- HUD bar: last price (flashes green/red), mark price, index price, **funding rate with countdown**,
+  open interest, 24h change, high/low and volume.
+- **Markets screener:** all contracts, sortable by volume, gainers, losers and funding, with favorites.
+- **Liquidation feed** (OKX, live): every liquidation, with a long/short total for the last hour
+  and large liquidations highlighted.
 
-**Timeframes**
-- Alle exchange-timeframes: 1s, 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1D, 3D, 1W, 1M.
-- **Elke eigen timeframe**: typ bijvoorbeeld `10m`, `45m`, `3h`, `2D`, `2W`, `3M` in het vakje "eigen". De app bouwt die zelf uit kleinere candles (ook live).
+**Futures indicators**
 
-**Grafiek**
-- Candles, hollow candles, Heikin Ashi, OHLC-bars, lijn, area en baseline.
-- Tekentools: horizontale lijn, trendlijn en Fibonacci retracement (worden per symbool bewaard).
-- Prijsalarmen (🔔 en dan klikken op de grafiek), met browsermelding.
-- Watchlist met live prijzen, licht/donker thema, werkt ook op je telefoon.
+| Indicator | Source | Note |
+|---|---|---|
+| Funding Rate (per period or annualized) | exchange | ~3 months of real history, usable in backtests |
+| Open Interest + OI Delta | recorded live | builds up while the app is open (stored in your browser) |
+| Long/Short Ratio (accounts) | Bitget | latest ~30 periods, grows over time |
+| Taker Buy/Sell Delta + CVD | Bitget | latest ~30 periods, grows over time |
 
-**Indicatoren (44)**
+Exchanges don't offer deep open-interest and long/short history to browsers. That's why
+those indicators are for live analysis and are not used in backtests.
 
-| Categorie | Indicatoren |
-|---|---|
-| Gemiddelden | SMA, EMA, WMA, HMA, SMMA/RMA, DEMA, TEMA, VWMA, LSMA, MA Cross, VWAP |
-| Banden en kanalen | Bollinger Bands, Keltner, Donchian, Envelope |
-| Trend | Ichimoku, Parabolic SAR, SuperTrend, ADX/DMI, Aroon, Choppiness |
-| Oscillatoren | RSI, MACD, Stochastic, Stoch RSI, CCI, Williams %R, ROC, Momentum, Awesome Osc., TRIX, Ultimate Osc., CMO, DPO |
-| Volume | Volume, OBV, MFI, CMF, Accumulation/Distribution, Elder Force Index |
-| Volatiliteit | ATR, Standard Deviation, Bollinger BandWidth, Historical Volatility |
+There are also 44 technical indicators: RSI, MACD, Bollinger, Ichimoku, SuperTrend, VWAP, ADX, ATR, OBV and more.
 
-Alle parameters zijn aan te passen (⚙ in de zijbalk).
+**Timeframes:** 1m up to 1M, plus **any custom timeframe** (`10m`, `45m`, `3h`, `8h`, `2D`, `2W`, …),
+which is built from smaller candles, live as well.
 
-**Strategieën (13 + eigen regels)**
-MA Crossover · Golden/Death Cross · RSI Overbought/Oversold · MACD Signal Cross ·
-Bollinger Mean Reversion · Bollinger Breakout · SuperTrend · Donchian/Turtle Breakout ·
-Stochastic Cross · Parabolic SAR · Ichimoku Cloud Breakout · ADX + DI Cross ·
-Trendfilter + RSI Pullback · **Eigen regels (no-code)**
+**Position calculator:** enter balance, risk %, leverage, entry, stop loss and take profit (or click the
+chart with ⌖). You get position size, required margin, **liquidation price**, risk/reward and warnings, for
+example when your liquidation price lies before your stop. Entry, SL, TP and LIQ are drawn as lines on the chart.
 
-Met "Eigen regels" maak je zelf strategieën zonder te programmeren, bijvoorbeeld:
+**Futures backtester**
+- Starting balance, margin % per trade, **leverage**, taker fee, slippage, maintenance margin.
+- **Liquidations** are simulated (isolated margin: you lose the margin of that position).
+- **Funding costs** from the real funding history (with a fixed rate where history is missing).
+- Long, short or both; stop loss, take profit, trailing stop.
+- Results: net profit, ROE per trade, number of liquidations, funding and fees paid, drawdown, Sharpe,
+  equity curve and trade list (CSV export).
+- **Optimizer:** grid search over strategy parameters **and leverage**.
 
-```
-Long entry:  EMA(9) crosses above EMA(21) AND RSI(14) > 50
-Long exit:   EMA(9) crosses below EMA(21) OR close < LOWEST(10)
-```
-
-**Backtester**
-- Startkapitaal, positiegrootte, commissie, slippage.
-- Long, short of allebei; stop loss, take profit en trailing stop.
-- Uitvoering op de open van de volgende bar (realistisch, zonder vooruitkijken) of op de slotkoers.
-- Resultaten: netto winst, buy & hold, win rate, profit factor, max drawdown, Sharpe, Sortino, CAGR,
-  tijd in de markt, kosten en meer. Daarnaast een equity curve met drawdown, een tradelijst (klik = naar die trade
-  op de grafiek) en export naar CSV.
-- **Optimizer**: test alle combinaties van 1–2 parameters en sorteer op het beste resultaat.
-
-## Belangrijk
-
-- Een goede backtest is **geen garantie** voor de toekomst. Pas op met overfitting: test de "beste"
-  instellingen ook op een andere periode of markt.
-- De backtester gaat uit van één positie tegelijk. Als stop loss en take profit in dezelfde candle worden
-  geraakt, rekent hij met de stop (voorzichtig).
-- Dit is een analyse- en leertool, geen financieel advies.
-
-## Projectstructuur
+**Strategies:** ⚡ Funding Contrarian (adaptive z-score on the real funding) · SuperTrend · MA Crossover ·
+Golden Cross · RSI · MACD · Bollinger (mean reversion and breakout) · Donchian/Turtle · Stochastic ·
+Parabolic SAR · Ichimoku · ADX/DI · Trend + RSI pullback · **Custom rules (no-code)**, for example:
 
 ```
-sidechart/
-  index.html          opbouw van de pagina
-  src/main.ts         app-logica en gebruikersinterface
-  src/chart.ts        grafiek, panelen, tekeningen, markers
-  src/data.ts         Binance-data, live stream, resampling, CSV
-  src/ta.ts           wiskunde van de indicatoren
-  src/indicators.ts   lijst met indicatoren en hun instellingen
-  src/strategies.ts   strategieën en de taal voor eigen regels
-  src/backtest.ts     backtest-engine, statistieken en optimizer
-  src/core.test.ts    unit tests
+Short entry:  FUNDING > 0.03 AND close < EMA(50)
+Short exit:   FUNDING < 0.01
 ```
 
-Een indicator of strategie toevoegen gaat door één object toe te voegen aan `INDICATORS` of `STRATEGIES`.
+**Other:** drawing tools (line, trendline, Fibonacci), price alarms with browser notifications, CSV import,
+works on mobile.
+
+## Important
+
+- Leverage magnifies both profit and loss. In the test (SuperTrend on BTC, 1h), the result at 50× was
+  **−75% with 20 liquidations**, against −10% at 10×.
+- A good backtest is **no guarantee** of future results, and the optimizer can cause overfitting.
+- The backtester holds one position at a time and uses the mark of the last bar as its price. In reality,
+  exchanges liquidate on the mark price, and fees and maintenance margin depend on your tier.
+- In some countries (including parts of the EU), exchanges don't allow retail customers to trade derivatives.
+  Market data still works.
+- This is an analysis tool, not financial advice. It places no orders.
+
+## Project structure
+
+```
+sidechart/src/
+  main.ts            app logic and user interface
+  chart.ts           chart, panes, drawings, position lines
+  exchanges/         OKX and Bitget (contracts, candles, live stream, funding, liquidations)
+  sentiment.ts       open-interest recorder + Bitget long/short & taker data
+  futures.ts         position calculator
+  backtest.ts        futures backtester (leverage, liquidation, funding) + optimizer
+  ta.ts              indicator math
+  indicators.ts      indicator list (including futures data)
+  strategies.ts      strategies and the language for custom rules
+  data.ts            timeframes, resampling, CSV
+```
